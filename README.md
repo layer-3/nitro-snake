@@ -1,29 +1,57 @@
 # Nitro-Snake
 
-A web client, with websocket pubsub snake game for 2 players games.
-The application is using 3 components:
+An online two-player snake game built with Vue and WebSocket.
 
-- The Vue frontend for snake
-- A micro WebSocket service with pubsub per roomId (rooms are identified by a SHA256)
-- A snake game service websocket client which syncronise and enforce game rules.
+## Features
 
-## Communication flow
-
-- First web client create a websocket room with a random SHA256 string (topic)
-- The second web client join the room with the same id
-- The snake-service automatically join the same room
-- When both participant are connected, the snake-service start the game by pushing the start game timestamp (5 second from server time)
-- Participant move their snake using json-rpc commands published in the websocket topic
-- Clients and game-service consume the message to reflect snakes positions
-- At every iteration, a dot will be drawn randomly on the map so one of the snake can eat it to earn point but also grow in length
-- If one of the snake hit a wall or the tail of a snake, he loose the game.
-- Server announce the outcome of the game.
+- Realtime multiplayer gameplay with WebSocket
+- Random SHA256 room ID generation for private games
+- Interactive lobby to create or join games
+- Player nicknames and scores
+- Collision detection and game physics
+- Clean, responsive UI
 
 ## Stack
 
 - Vue 3 + TypeScript + Vite
-- Fastify (fastify.dev) for websocket pubsub server
+- WebSocket for realtime communication
+- Canvas-based game rendering
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+## How to Play
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+1. Enter your nickname
+2. Create a new game room or join an existing one with a room ID
+3. Share the room ID with your friend
+4. Use arrow keys or WASD to control your snake
+5. Eat food to grow your snake and earn points
+6. Avoid collisions with other snakes and their tails
+
+## Game Rules
+
+- Each player controls a snake in the game area
+- Eat food to grow your snake and earn points
+- If you collide with another snake or their tail, your snake will reset and you'll lose points
+- The game continues until players decide to leave
+
+## Running Locally
+
+```bash
+# Install dependencies
+npm install
+
+# Start the WebSocket server
+npm run server
+
+# In another terminal, start the frontend
+npm run dev
+```
+
+Visit `http://localhost:5173` in your browser to play the game.
+
+## Communication Flow
+
+1. First player creates a room with a random SHA256 string
+2. Second player joins the room using the same ID
+3. When both players are connected, the game starts
+4. Players control their snakes using keyboard inputs
+5. Game state is synchronized between all clients in real-time
