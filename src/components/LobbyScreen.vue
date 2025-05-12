@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { defineEmits, defineProps } from 'vue';
+import { defineEmits, defineProps, ref } from 'vue';
+import WalletConnect from './WalletConnect.vue';
+import ChannelSetup from './ChannelSetup.vue';
 
 const props = defineProps<{
   nickname: string;
@@ -14,6 +16,13 @@ const emit = defineEmits([
   'join-room'
 ]);
 
+const isWalletConnected = ref(false);
+const isChannelCreated = ref(false);
+const isCreatingRoom = ref(false);
+const isJoiningRoom = ref(false);
+const walletAddress = ref('');
+const channelInfo = ref<any>(null);
+
 const updateNickname = (e: Event) => {
   emit('update:nickname', (e.target as HTMLInputElement).value);
 };
@@ -23,16 +32,61 @@ const updateRoomId = (e: Event) => {
 };
 
 const createRoom = () => {
-  emit('create-room');
+  if (isChannelCreated.value) {
+    isCreatingRoom.value = true;
+    emit('create-room');
+  } else {
+    emit('update:errorMessage', 'Please create a channel first');
+  }
 };
 
 const joinRoom = () => {
-  emit('join-room');
+  if (isChannelCreated.value) {
+    isJoiningRoom.value = true;
+    emit('join-room');
+  } else {
+    emit('update:errorMessage', 'Please join a channel first');
+  }
+};
+
+// Handle wallet connection events
+const onWalletConnected = (data: { address: string, balance: bigint }) => {
+  isWalletConnected.value = true;
+  walletAddress.value = data.address;
+};
+
+const onWalletDisconnected = () => {
+  isWalletConnected.value = false;
+  walletAddress.value = '';
+  isChannelCreated.value = false;
+  channelInfo.value = null;
+};
+
+// Handle channel creation events
+const onChannelCreated = (data: any) => {
+  isChannelCreated.value = true;
+  channelInfo.value = data;
+};
+
+const onChannelJoined = (data: any) => {
+  isChannelCreated.value = true;
+  channelInfo.value = data;
+};
+
+const onError = (error: string) => {
+  emit('update:errorMessage', error);
 };
 </script>
 
 <template>
   <div class="lobby">
+    <!-- Wallet Connection Card -->
+    <WalletConnect 
+      @wallet-connected="onWalletConnected" 
+      @wallet-disconnected="onWalletDisconnected"
+      @error="onError"
+    />
+    
     <!-- Username Card -->
     <div class="form-container">
       <h2>Set Username</h2>
@@ -45,9 +99,21 @@ const joinRoom = () => {
           :value="nickname" 
           @input="updateNickname" 
           placeholder="Enter your nickname"
+          :disabled="isCreatingRoom || isJoiningRoom"
         />
       </div>
     </div>
+    
+    <!-- Channel Setup -->
+    <ChannelSetup
+      v-if="isWalletConnected && nickname"
+      :isWalletConnected="isWalletConnected"
+      :roomId="roomId || 'new-room'"
+      :roomCreator="!roomId"
+      @channel-created="onChannelCreated"
+      @channel-joined="onChannelJoined"
+      @error="onError"
+    />
     
     <!-- Game Actions Card -->
     <div class="form-container">
@@ -55,7 +121,19 @@ const joinRoom = () => {
       
       <div class="actions">
         <div class="action-group">
-          <button @click="createRoom" class="btn primary">Create New Room</button>
+          <button 
+            @click="createRoom" 
+            class="btn primary"
+            :disabled="!nickname || !isWalletConnected || !isChannelCreated || isCreatingRoom"
+          >
+            {{ isCreatingRoom ? 'Creating Room...' : 'Create New Room' }}
+          </button>
+          
+          <div class="requirements" v-if="!isWalletConnected || !nickname || !isChannelCreated">
+            <div v-if="!isWalletConnected" class="requirement">⚠️ Connect wallet first</div>
+            <div v-if="!nickname" class="requirement">⚠️ Set a nickname first</div>
+            <div v-if="isWalletConnected && nickname && !isChannelCreated" class="requirement">⚠️ Create a channel first</div>
+          </div>
         </div>
         
         <div class="divider">OR</div>
@@ -69,9 +147,23 @@ const joinRoom = () => {
               :value="roomId" 
               @input="updateRoomId" 
               placeholder="Enter room ID"
+              :disabled="isJoiningRoom"
             />
           </div>
-          <button @click="joinRoom" class="btn secondary">Join Existing Room</button>
+          <button 
+            @click="joinRoom" 
+            class="btn secondary"
+            :disabled="!nickname || !roomId || !isWalletConnected || !isChannelCreated || isJoiningRoom"
+          >
+            {{ isJoiningRoom ? 'Joining Room...' : 'Join Existing Room' }}
+          </button>
+          
+          <div class="requirements" v-if="!isWalletConnected || !nickname || !roomId || !isChannelCreated">
+            <div v-if="!isWalletConnected" class="requirement">⚠️ Connect wallet first</div>
+            <div v-if="!nickname" class="requirement">⚠️ Set a nickname first</div>
+            <div v-if="!roomId" class="requirement">⚠️ Enter a room ID</div>
+            <div v-if="isWalletConnected && nickname && roomId && !isChannelCreated" class="requirement">⚠️ Join a channel first</div>
+          </div>
         </div>
       </div>
       
@@ -201,5 +293,15 @@ input:focus {
   border-radius: 4px;
   margin-top: 20px;
   text-align: center;
+}
+
+.requirements {
+  margin-top: 10px;
+  font-size: 0.85em;
+}
+
+.requirement {
+  color: #f44336;
+  margin-bottom: 4px;
 }
 </style>

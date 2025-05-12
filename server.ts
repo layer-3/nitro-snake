@@ -1,11 +1,13 @@
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
+import axios from 'axios';
 
 // Extend WebSocket type to include our custom properties
 interface SnakeWebSocket extends WebSocket {
   playerId: string;
   roomId: string;
+  channelId?: string; // ClearNet channel ID
 }
 
 interface Player {
@@ -25,9 +27,80 @@ interface Room {
   gameInterval: NodeJS.Timeout | null;
   gridSize: { width: number; height: number };
   isGameOver?: boolean;
+  channelIds: Set<string>; // Track channels associated with this room
+  currentState: any; // Current game state for the channel
+  stateVersion: number; // State version counter
+  pendingSignatures: Map<string, { 
+    channelId: string;
+    state: any; 
+    signatures: Map<string, string>;
+    timestamp: number;
+  }>[]; // Pending states waiting for signatures, indexed by channelId
 }
 
 const rooms = new Map<string, Room>();
+
+// ClearNet RPC configuration
+const CLEARNET_RPC_URL = process.env.CLEARNET_RPC_URL || 'https://api.clearnet.dev/rpc';
+const CLEARNET_API_KEY = process.env.CLEARNET_API_KEY || 'dev-key';
+
+// ClearNet RPC client functions
+const clearNetRPC = {
+  // Submit a state update to the ClearNet RPC
+  async submitState(channelId: string, state: any): Promise<boolean> {
+    try {
+      const response = await axios.post(`${CLEARNET_RPC_URL}/channels/${channelId}/state`, 
+        { state },
+        { headers: { 'X-API-Key': CLEARNET_API_KEY } }
+      );
+      return response.status === 200;
+    } catch (error) {
+      console.error(`Error submitting state to ClearNet RPC for channel ${channelId}:`, error);
+      return false;
+    }
+  },
+
+  // Register a watchtower with the channel
+  async registerWatchtower(channelId: string): Promise<boolean> {
+    try {
+      const response = await axios.post(`${CLEARNET_RPC_URL}/channels/${channelId}/watchtower`,
+        {},
+        { headers: { 'X-API-Key': CLEARNET_API_KEY } }
+      );
+      return response.status === 200;
+    } catch (error) {
+      console.error(`Error registering watchtower for channel ${channelId}:`, error);
+      return false;
+    }
+  },
+
+  // Finalize a channel
+  async finalizeChannel(channelId: string, finalState: any): Promise<boolean> {
+    try {
+      const response = await axios.post(`${CLEARNET_RPC_URL}/channels/${channelId}/finalize`,
+        { finalState },
+        { headers: { 'X-API-Key': CLEARNET_API_KEY } }
+      );
+      return response.status === 200;
+    } catch (error) {
+      console.error(`Error finalizing channel ${channelId}:`, error);
+      return false;
+    }
+  },
+
+  // Get channel info
+  async getChannelInfo(channelId: string): Promise<any> {
+    try {
+      const response = await axios.get(`${CLEARNET_RPC_URL}/channels/${channelId}`,
+        { headers: { 'X-API-Key': CLEARNET_API_KEY } }
+      );
+      return response.data;
+    } catch (error) {
+      console.error(`Error getting info for channel ${channelId}:`, error);
+      return null;
+    }
+  }
+};
 
 // Create HTTP server
 const server = createServer();
@@ -83,7 +156,7 @@ function initializePlayer(id: string, nickname: string, gridSize: { width: numbe
 }
 
 // Game tick for a room
-function gameTick(roomId: string) {
+async function gameTick(roomId: string) {
   const room = rooms.get(roomId);
   if (!room) return;
   
@@ -174,8 +247,8 @@ function gameTick(roomId: string) {
   broadcastGameState(roomId);
 }
 
-// Broadcast game state to all clients in a room
-function broadcastGameState(roomId: string) {
+// Broadcast game state to all clients in a room and update ClearNet channels
+async function broadcastGameState(roomId: string) {
   const room = rooms.get(roomId);
   if (!room) return;
   
@@ -190,8 +263,90 @@ function broadcastGameState(roomId: string) {
     })),
     food: room.food,
     gridSize: room.gridSize,
-    isGameOver: room.isGameOver || false
+    isGameOver: room.isGameOver || false,
+    stateVersion: ++room.stateVersion,
+    timestamp: Date.now()
   };
+  
+  // Store the current state in the room for ClearNet
+  room.currentState = gameState;
+  
+  // Submit state to all ClearNet channels associated with this room
+  if (room.channelIds.size > 0) {
+    // Create a simplified state for the channel to reduce size
+    const channelState = {
+      roomId,
+      stateVersion: gameState.stateVersion,
+      players: gameState.players.map(p => ({
+        id: p.id,
+        nickname: p.nickname,
+        score: p.score,
+        isDead: p.isDead
+      })),
+      isGameOver: gameState.isGameOver,
+      timestamp: gameState.timestamp
+    };
+    
+    // For each channel, request signatures from participants
+    for (const channelId of room.channelIds) {
+      // Create a pending signature entry for this state
+      if (!room.pendingSignatures.has(channelId)) {
+        room.pendingSignatures.set(channelId, []);
+      }
+      
+      const pendingState = {
+        channelId,
+        state: channelState,
+        signatures: new Map<string, string>(),
+        timestamp: Date.now()
+      };
+      
+      room.pendingSignatures.get(channelId)?.push(pendingState);
+      
+      // Request signatures from all players in the room
+      wss.clients.forEach(client => {
+        const snakeClient = client as SnakeWebSocket;
+        if (snakeClient.roomId === roomId && snakeClient.readyState === WebSocket.OPEN) {
+          const stateForSignature = {
+            type: 'signState',
+            channelId,
+            state: channelState,
+            stateId: `${roomId}-${channelState.stateVersion}`,
+          };
+          
+          snakeClient.send(JSON.stringify(stateForSignature));
+        }
+      });
+    }
+    
+    // Clean up old pending signatures (older than 1 minute)
+    const ONE_MINUTE = 60 * 1000;
+    for (const [channelId, pendingStates] of room.pendingSignatures.entries()) {
+      const currentTime = Date.now();
+      const validStates = pendingStates.filter(entry => 
+        (currentTime - entry.timestamp) < ONE_MINUTE
+      );
+      room.pendingSignatures.set(channelId, validStates);
+    }
+  }
+    
+    // If game is over, finalize channels
+    if (gameState.isGameOver) {
+      const finalizePromises = Array.from(room.channelIds).map(channelId => 
+        clearNetRPC.finalizeChannel(channelId, {
+          ...channelState,
+          finalizedAt: Date.now()
+        })
+      );
+      
+      try {
+        await Promise.all(finalizePromises);
+        console.log(`Finalized all channels for room ${roomId}`);
+      } catch (error) {
+        console.error(`Error finalizing channels for room ${roomId}:`, error);
+      }
+    }
+  }
   
   // Broadcast to all players in the room
   wss.clients.forEach(client => {
@@ -222,14 +377,31 @@ wss.on('connection', (ws: WebSocket) => {
           // Create player
           const player = initializePlayer(snakeWs.playerId, nickname, gridSize);
           
-          // Create room
+          // Create room with channel support
           const room: Room = {
             id: roomId,
             players: new Map([[player.id, player]]),
             food: generateFood(gridSize, new Map([[player.id, player]])),
             gameInterval: null,
-            gridSize
+            gridSize,
+            channelIds: new Set(),
+            currentState: null,
+            stateVersion: 0,
+            pendingSignatures: new Map()
           };
+          
+          // Add channelId if provided
+          if (data.channelId) {
+            room.channelIds.add(data.channelId);
+            snakeWs.channelId = data.channelId;
+            
+            // Register watchtower for the channel if needed
+            try {
+              await clearNetRPC.registerWatchtower(data.channelId);
+            } catch (error) {
+              console.error(`Error registering watchtower for channel ${data.channelId}:`, error);
+            }
+          }
           
           rooms.set(roomId, room);
           
@@ -274,6 +446,19 @@ wss.on('connection', (ws: WebSocket) => {
           
           snakeWs.roomId = roomId;
           
+          // Add channelId if provided
+          if (data.channelId) {
+            room.channelIds.add(data.channelId);
+            snakeWs.channelId = data.channelId;
+            
+            // Register watchtower for the channel if needed
+            try {
+              await clearNetRPC.registerWatchtower(data.channelId);
+            } catch (error) {
+              console.error(`Error registering watchtower for channel ${data.channelId}:`, error);
+            }
+          }
+          
           // Respond with room info
           snakeWs.send(JSON.stringify({
             type: 'roomJoined',
@@ -285,8 +470,12 @@ wss.on('connection', (ws: WebSocket) => {
           
           // Start game if we have 2 players
           if (room.players.size === 2 && !room.gameInterval) {
-            room.gameInterval = setInterval(() => gameTick(roomId), 150);
-            broadcastGameState(roomId);
+            room.gameInterval = setInterval(async () => {
+              await gameTick(roomId);
+            }, 150);
+            
+            // Initial game state broadcast
+            await broadcastGameState(roomId);
           }
           
           break;
@@ -319,16 +508,155 @@ wss.on('connection', (ws: WebSocket) => {
           player.direction = direction;
           break;
         }
+
+        case 'playAgain': {
+          const { roomId } = data;
+          if (!roomId) return;
+          
+          const room = rooms.get(roomId);
+          if (!room) return;
+          
+          // Reset game state
+          room.isGameOver = false;
+          
+          // Reset players
+          for (const player of room.players.values()) {
+            const { width, height } = room.gridSize;
+            const x = Math.floor(Math.random() * (width - 10)) + 5;
+            const y = Math.floor(Math.random() * (height - 10)) + 5;
+            
+            player.position = { x, y };
+            player.direction = ['up', 'down', 'left', 'right'][Math.floor(Math.random() * 4)] as 'up' | 'down' | 'left' | 'right';
+            player.segments = [{ x, y }];
+            player.score = 0;
+            player.isDead = false;
+          }
+          
+          // Create new food
+          room.food = generateFood(room.gridSize, room.players);
+          
+          // Reset state version
+          room.stateVersion = 0;
+          
+          // Restart game interval if needed
+          if (!room.gameInterval) {
+            room.gameInterval = setInterval(async () => {
+              await gameTick(roomId);
+            }, 150);
+          }
+          
+          // Broadcast initial game state
+          await broadcastGameState(roomId);
+          
+          break;
+        }
+        
+        case 'stateSignature': {
+          const { channelId, stateId, signature, playerId } = data;
+          if (!channelId || !stateId || !signature || !playerId) return;
+          
+          const roomId = snakeWs.roomId;
+          if (!roomId) return;
+          
+          const room = rooms.get(roomId);
+          if (!room) return;
+          
+          // Find the pending state for this signature
+          const pendingStates = room.pendingSignatures.get(channelId);
+          if (!pendingStates || pendingStates.length === 0) return;
+          
+          // Extract state version from stateId (format: "roomId-stateVersion")
+          const stateVersionStr = stateId.split('-')[1];
+          if (!stateVersionStr) return;
+          
+          // Find the pending state with the matching version
+          const stateVersion = parseInt(stateVersionStr);
+          const pendingStateIndex = pendingStates.findIndex(p => p.state.stateVersion === stateVersion);
+          
+          if (pendingStateIndex >= 0) {
+            const pendingState = pendingStates[pendingStateIndex];
+            
+            // Add signature to the pending state
+            pendingState.signatures.set(playerId, signature);
+            
+            // If we have signatures from all players in the room, submit the state
+            if (pendingState.signatures.size >= room.players.size) {
+              try {
+                // Add signatures to the state
+                const stateWithSignatures = {
+                  ...pendingState.state,
+                  signatures: Object.fromEntries(pendingState.signatures)
+                };
+                
+                // Submit state to ClearNet RPC
+                await clearNetRPC.submitState(channelId, stateWithSignatures);
+                
+                // Remove this state from pending signatures
+                pendingStates.splice(pendingStateIndex, 1);
+                
+                console.log(`Successfully submitted state ${stateId} to channel ${channelId}`);
+              } catch (error) {
+                console.error(`Error submitting state ${stateId} to channel ${channelId}:`, error);
+              }
+            }
+          }
+          
+          break;
+        }
+        
+        case 'finalizeChannel': {
+          const { channelId, roomId } = data;
+          if (!channelId || !roomId) return;
+          
+          const room = rooms.get(roomId);
+          if (!room) return;
+          
+          // Finalize the channel
+          try {
+            const channelState = {
+              roomId,
+              stateVersion: room.stateVersion,
+              players: Array.from(room.players.values()).map(p => ({
+                id: p.id,
+                nickname: p.nickname,
+                score: p.score,
+                isDead: p.isDead || false
+              })),
+              isGameOver: true,
+              finalizedAt: Date.now()
+            };
+            
+            await clearNetRPC.finalizeChannel(channelId, channelState);
+            
+            // Remove the channel from the room
+            room.channelIds.delete(channelId);
+            
+            snakeWs.send(JSON.stringify({
+              type: 'channelFinalized',
+              channelId
+            }));
+          } catch (error) {
+            console.error(`Error finalizing channel ${channelId}:`, error);
+            
+            snakeWs.send(JSON.stringify({
+              type: 'error',
+              message: 'Failed to finalize channel'
+            }));
+          }
+          
+          break;
+        }
       }
     } catch (error) {
       console.error('Error handling message:', error);
     }
   });
   
-  snakeWs.on('close', () => {
+  snakeWs.on('close', async () => {
     console.log('Client disconnected');
     
     const roomId = snakeWs.roomId;
+    const channelId = snakeWs.channelId;
     if (!roomId) return;
     
     const room = rooms.get(roomId);
@@ -342,11 +670,68 @@ wss.on('connection', (ws: WebSocket) => {
       if (room.gameInterval) {
         clearInterval(room.gameInterval);
       }
+      
+      // Finalize any remaining channels
+      if (room.channelIds.size > 0) {
+        const finalState = {
+          roomId,
+          stateVersion: room.stateVersion,
+          players: Array.from(room.players.values()).map(p => ({
+            id: p.id,
+            nickname: p.nickname,
+            score: p.score,
+            isDead: p.isDead || false
+          })),
+          isGameOver: true,
+          finalizedAt: Date.now(),
+          reason: 'room_closed'
+        };
+        
+        const finalizePromises = Array.from(room.channelIds).map(id => 
+          clearNetRPC.finalizeChannel(id, finalState)
+        );
+        
+        try {
+          await Promise.all(finalizePromises);
+          console.log(`Finalized all channels for closing room ${roomId}`);
+        } catch (error) {
+          console.error(`Error finalizing channels for room ${roomId}:`, error);
+        }
+      }
+      
       rooms.delete(roomId);
       console.log(`Room deleted: ${roomId}`);
     } else {
+      // If this client had a channel associated, mark the game as over
+      if (channelId && room.channelIds.has(channelId)) {
+        room.isGameOver = true;
+        
+        // Finalize this channel
+        try {
+          const finalState = {
+            roomId,
+            stateVersion: room.stateVersion,
+            players: Array.from(room.players.values()).map(p => ({
+              id: p.id,
+              nickname: p.nickname,
+              score: p.score,
+              isDead: p.isDead || false
+            })),
+            isGameOver: true,
+            finalizedAt: Date.now(),
+            reason: 'player_disconnected'
+          };
+          
+          await clearNetRPC.finalizeChannel(channelId, finalState);
+          room.channelIds.delete(channelId);
+          console.log(`Finalized channel ${channelId} due to player disconnect`);
+        } catch (error) {
+          console.error(`Error finalizing channel ${channelId}:`, error);
+        }
+      }
+      
       // Broadcast updated game state
-      broadcastGameState(roomId);
+      await broadcastGameState(roomId);
     }
   });
 });

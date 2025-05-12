@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
 import GameRoom from './components/GameRoom.vue';
 import LobbyScreen from './components/LobbyScreen.vue';
+import clearNetService from './services/ClearNetService';
 
 const nickname = ref('');
 const roomId = ref('');
@@ -10,7 +11,10 @@ const isConnected = ref(false);
 const currentScreen = ref('lobby'); // 'lobby' or 'game'
 const playerId = ref('');
 const errorMessage = ref('');
+const channelData = ref(null);
+const gameSessionId = ref('');
 
+// Connect to WebSocket server
 const connectWebSocket = () => {
   // Use localhost for development, would need proper deployment URL for production
   const wsUrl = `ws://${window.location.hostname}:3001`;
@@ -38,10 +42,22 @@ const connectWebSocket = () => {
       if (data.type === 'roomCreated' || data.type === 'roomJoined') {
         roomId.value = data.roomId;
         playerId.value = data.playerId;
-        currentScreen.value = 'game';
-        errorMessage.value = '';
+        
+        // Start vApp session with ClearNet
+        startGameSession(data.roomId, data.playerId);
       } else if (data.type === 'error') {
         errorMessage.value = data.message;
+      } else if (data.type === 'gameState') {
+        // Update state in ClearNet channel on game state changes
+        if (gameSessionId.value) {
+          updateGameState(JSON.stringify(data));
+        }
+      } else if (data.type === 'signState') {
+        // Sign state update for the channel
+        const { channelId, state, stateId } = data;
+        handleStateSignRequest(channelId, state, stateId);
+      } else if (data.type === 'channelFinalized') {
+        console.log(`Channel ${data.channelId} has been finalized`);
       }
     } catch (error) {
       console.error('Error parsing message:', error);
@@ -49,6 +65,96 @@ const connectWebSocket = () => {
   };
 };
 
+// Start a ClearNet game session
+const startGameSession = async (gameRoomId: string, gamePlayerId: string) => {
+  // Initialize the game state for the channel
+  const initialState = {
+    roomId: gameRoomId,
+    playerId: gamePlayerId,
+    nickname: nickname.value,
+    timestamp: Date.now()
+  };
+  
+  try {
+    // Get active channel from ClearNet service
+    const activeChannel = clearNetService.getActiveChannel();
+    if (!activeChannel) {
+      console.error('No active channel available');
+      errorMessage.value = 'No active channel found. Please create or join a channel first.';
+      return;
+    }
+    
+    // Start the game session
+    const session = await clearNetService.openGameSession(JSON.stringify(initialState));
+    if (session) {
+      gameSessionId.value = session.sessionId;
+      // Move to game screen now that we have both a game room and channel session
+      currentScreen.value = 'game';
+      errorMessage.value = '';
+    } else {
+      errorMessage.value = 'Failed to start game session';
+    }
+  } catch (error) {
+    console.error('Error starting game session:', error);
+    errorMessage.value = 'Error starting game session';
+  }
+};
+
+// Update game state in the ClearNet channel
+const updateGameState = async (stateData: string) => {
+  try {
+    // In a real implementation, this would be properly versioned
+    // and managed with signatures
+    const version = BigInt(Math.floor(Date.now() / 1000)); // Use timestamp as version for demo
+    await clearNetService.updateGameState(stateData, version);
+  } catch (error) {
+    console.error('Error updating game state:', error);
+  }
+};
+
+// Handle state signature requests from the server
+const handleStateSignRequest = async (channelId: string, state: any, stateId: string) => {
+  try {
+    // Sign the state using the ClearNet service
+    const signatureData = await clearNetService.signState(state, stateId, channelId);
+    
+    if (signatureData && socket.value && socket.value.readyState === WebSocket.OPEN) {
+      // Send signature back to server
+      socket.value.send(JSON.stringify({
+        type: 'stateSignature',
+        channelId: signatureData.channelId,
+        stateId: signatureData.stateId,
+        signature: signatureData.signature,
+        playerId: signatureData.playerId
+      }));
+    }
+  } catch (error) {
+    console.error('Error signing state:', error);
+  }
+};
+
+// Handle game over and channel closing
+const handleGameOver = async () => {
+  try {
+    const activeChannel = clearNetService.getActiveChannel();
+    if (activeChannel && gameSessionId.value) {
+      // Add final game state with game over flag
+      const finalState = {
+        ...activeChannel.state,
+        gameOver: true,
+        endTimestamp: Date.now()
+      };
+      
+      // Close the game session and finalize the channel
+      await clearNetService.closeGameSession(finalState);
+      gameSessionId.value = '';
+    }
+  } catch (error) {
+    console.error('Error handling game over:', error);
+  }
+};
+
+// Create a new game room
 const createRoom = () => {
   if (!socket.value || socket.value.readyState !== WebSocket.OPEN) {
     errorMessage.value = 'Not connected to server';
@@ -60,12 +166,22 @@ const createRoom = () => {
     return;
   }
   
+  // Check if we have an active channel
+  const activeChannel = clearNetService.getActiveChannel();
+  if (!activeChannel) {
+    errorMessage.value = 'Please create a channel first';
+    return;
+  }
+  
+  // Include channel ID in room creation request
   socket.value.send(JSON.stringify({
     type: 'createRoom',
-    nickname: nickname.value.trim()
+    nickname: nickname.value.trim(),
+    channelId: activeChannel.channelId // Send channel ID to server
   }));
 };
 
+// Join an existing game room
 const joinRoom = () => {
   if (!socket.value || socket.value.readyState !== WebSocket.OPEN) {
     errorMessage.value = 'Not connected to server';
@@ -82,12 +198,29 @@ const joinRoom = () => {
     return;
   }
   
+  // Check if we have an active channel
+  const activeChannel = clearNetService.getActiveChannel();
+  if (!activeChannel) {
+    errorMessage.value = 'Please join a channel first';
+    return;
+  }
+  
+  // Include channel ID in join request
   socket.value.send(JSON.stringify({
     type: 'joinRoom',
     roomId: roomId.value.trim(),
-    nickname: nickname.value.trim()
+    nickname: nickname.value.trim(),
+    channelId: activeChannel.channelId // Send channel ID to server
   }));
 };
+
+// Watch for game over
+watch(() => currentScreen.value, (newScreen, oldScreen) => {
+  if (oldScreen === 'game' && newScreen === 'lobby') {
+    // Game ended, handle channel closing
+    handleGameOver();
+  }
+});
 
 onMounted(() => {
   connectWebSocket();
@@ -96,6 +229,11 @@ onMounted(() => {
 onUnmounted(() => {
   if (socket.value) {
     socket.value.close();
+  }
+  
+  // Clean up game session if needed
+  if (gameSessionId.value) {
+    handleGameOver();
   }
 });
 </script>
@@ -127,6 +265,7 @@ onUnmounted(() => {
           :roomId="roomId"
           :playerId="playerId"
           :nickname="nickname"
+          @exit-game="currentScreen = 'lobby'"
         />
       </div>
     </main>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
+import clearNetService from '../services/ClearNetService';
 
 const props = defineProps<{
   socket: WebSocket | null;
@@ -7,6 +8,8 @@ const props = defineProps<{
   playerId: string;
   nickname: string;
 }>();
+
+const emit = defineEmits(['exit-game']);
 
 interface Player {
   id: string;
@@ -30,6 +33,7 @@ const cellSize = ref(15); // Size of each cell in pixels
 const isGameStarted = ref(false);
 const waitingForPlayer = ref(false);
 const gameOver = ref(false);
+const copySuccess = ref(false);
 
 // Handle incoming WebSocket messages
 const handleMessage = (event: MessageEvent) => {
@@ -278,7 +282,6 @@ const isTie = (): boolean => {
 };
 
 // Copy room ID to clipboard
-const copySuccess = ref(false);
 const copyRoomId = () => {
   navigator.clipboard.writeText(props.roomId)
     .then(() => {
@@ -290,6 +293,57 @@ const copyRoomId = () => {
     .catch(err => {
       console.error('Failed to copy room ID: ', err);
     });
+};
+
+// Close channel and withdraw funds
+const closeChannel = async () => {
+  try {
+    const activeChannel = clearNetService.getActiveChannel();
+    if (activeChannel) {
+      // Create a final state with game results
+      const finalState = {
+        ...activeChannel.state,
+        gameOver: true,
+        finalScores: gameState.value?.players.map(p => ({ 
+          id: p.id, 
+          nickname: p.nickname, 
+          score: p.score 
+        }))
+      };
+      
+      // Close the channel
+      const success = await clearNetService.closeGameSession(finalState);
+      
+      if (success) {
+        // Withdraw 80% of funds as an example (in a real app this would be calculated)
+        const accountInfo = await clearNetService.getAccountInfo();
+        if (accountInfo && accountInfo.available > 0n) {
+          const withdrawAmount = accountInfo.available * 80n / 100n;
+          await clearNetService.withdrawFunds(withdrawAmount);
+        }
+        
+        // Exit game and return to lobby
+        emit('exit-game');
+      }
+    }
+  } catch (error) {
+    console.error('Error closing channel:', error);
+  }
+};
+
+// Play another game with the same channel
+const playAgain = () => {
+  // Reset game state
+  gameOver.value = false;
+  
+  // Notify server that we want to play again
+  if (props.socket && props.socket.readyState === WebSocket.OPEN) {
+    props.socket.send(JSON.stringify({
+      type: 'playAgain',
+      roomId: props.roomId,
+      playerId: props.playerId
+    }));
+  }
 };
 </script>
 
@@ -310,6 +364,11 @@ const copyRoomId = () => {
       <div v-if="copySuccess" class="copy-success">Room ID copied to clipboard!</div>
     </div>
     
+    <div class="channel-status">
+      <span class="status-label">Channel Status:</span>
+      <span class="status-value active">Active</span>
+    </div>
+    
     <div v-if="waitingForPlayer" class="waiting-message">
       Waiting for another player to join...
     </div>
@@ -325,6 +384,11 @@ const copyRoomId = () => {
             </span>
           </span>
         </div>
+      </div>
+      
+      <div class="game-over-actions">
+        <button @click="closeChannel" class="close-channel-btn">Close Channel & Withdraw</button>
+        <button @click="playAgain" class="play-again-btn">Play Again</button>
       </div>
     </div>
     
@@ -489,5 +553,106 @@ canvas {
   font-size: 14px;
   min-width: 60px;
   display: inline-block;
+}
+
+.room-id {
+  cursor: pointer;
+  padding: 2px 5px;
+  background-color: #f0f0f0;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.room-id:hover {
+  background-color: #e0e0e0;
+}
+
+.copy-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #666;
+  vertical-align: middle;
+  margin-left: 5px;
+  padding: 3px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.copy-btn:hover {
+  background-color: #e0e0e0;
+}
+
+.copy-success {
+  margin-top: 5px;
+  color: #4CAF50;
+  font-size: 0.9em;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.channel-status {
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin-bottom: 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status-label {
+  font-weight: 600;
+  color: #666;
+}
+
+.status-value {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-weight: bold;
+}
+
+.status-value.active {
+  background-color: #e8f5e9;
+  color: #388e3c;
+}
+
+.game-over-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+  gap: 15px;
+}
+
+.close-channel-btn, .play-again-btn {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.close-channel-btn {
+  background-color: #f44336;
+  color: white;
+}
+
+.close-channel-btn:hover {
+  background-color: #d32f2f;
+}
+
+.play-again-btn {
+  background-color: #4CAF50;
+  color: white;
+}
+
+.play-again-btn:hover {
+  background-color: #388e3c;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 </style>

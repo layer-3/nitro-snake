@@ -10,6 +10,8 @@
     "server": "npx tsx server.ts"
   },
   "dependencies": {
+    "@erc7824/nitrolite": "^0.0.46-alpha",
+    "axios": "^1.9.0",
     "fastify": "^5.3.2",
     "vue": "^3.5.13",
     "ws": "^8.16.0"
