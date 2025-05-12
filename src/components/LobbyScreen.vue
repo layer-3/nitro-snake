@@ -33,8 +33,9 @@ const joinRoom = () => {
 
 <template>
   <div class="lobby">
+    <!-- Username Card -->
     <div class="form-container">
-      <h2>Enter Game</h2>
+      <h2>Set Username</h2>
       
       <div class="form-group">
         <label for="nickname">Your Nickname:</label>
@@ -46,6 +47,11 @@ const joinRoom = () => {
           placeholder="Enter your nickname"
         />
       </div>
+    </div>
+    
+    <!-- Game Actions Card -->
+    <div class="form-container">
+      <h2>Game Options</h2>
       
       <div class="actions">
         <div class="action-group">
@@ -79,9 +85,11 @@ const joinRoom = () => {
 <style scoped>
 .lobby {
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   min-height: 60vh;
+  gap: 20px;
 }
 
 .form-container {
