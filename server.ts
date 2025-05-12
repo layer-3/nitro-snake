@@ -15,6 +15,7 @@ interface Player {
   direction: 'up' | 'down' | 'left' | 'right';
   segments: Array<{ x: number; y: number }>;
   score: number;
+  isDead?: boolean;
 }
 
 interface Room {
@@ -23,6 +24,7 @@ interface Room {
   food: { x: number; y: number };
   gameInterval: NodeJS.Timeout | null;
   gridSize: { width: number; height: number };
+  isGameOver?: boolean;
 }
 
 const rooms = new Map<string, Room>();
@@ -85,11 +87,19 @@ function gameTick(roomId: string) {
   const room = rooms.get(roomId);
   if (!room) return;
   
+  // If game is over, don't process any more ticks
+  if (room.isGameOver) {
+    return;
+  }
+  
   const { players, food, gridSize } = room;
   const playersArray = Array.from(players.values());
   
   // Move each player
   for (const player of playersArray) {
+    // Skip if player is dead
+    if (player.isDead) continue;
+    
     // Get current head position
     const head = { ...player.position };
     
@@ -127,6 +137,7 @@ function gameTick(roomId: string) {
     player.segments.unshift({ ...head });
     
     // Check for collisions with other players
+    let isCollision = false;
     for (const otherPlayer of playersArray) {
       // Skip first segment of the current player
       const segments = otherPlayer === player ? 
@@ -135,16 +146,26 @@ function gameTick(roomId: string) {
       
       for (const segment of segments) {
         if (head.x === segment.x && head.y === segment.y) {
-          // Collision detected - reset the player
-          const { width, height } = gridSize;
-          player.position = { 
-            x: Math.floor(Math.random() * (width - 10)) + 5,
-            y: Math.floor(Math.random() * (height - 10)) + 5
-          };
-          player.segments = [{ ...player.position }];
-          player.score = Math.max(0, player.score - 20);
+          // Collision detected - mark player as dead
+          isCollision = true;
+          player.isDead = true;
           break;
         }
+      }
+      if (isCollision) break;
+    }
+  }
+  
+  // Check if game is over (only one player left alive or all players dead)
+  if (playersArray.length > 1) {
+    const alivePlayers = playersArray.filter(p => !p.isDead);
+    if (alivePlayers.length <= 1) {
+      room.isGameOver = true;
+      
+      // If there's an interval, clear it to stop the game
+      if (room.gameInterval) {
+        clearInterval(room.gameInterval);
+        room.gameInterval = null;
       }
     }
   }
@@ -164,10 +185,12 @@ function broadcastGameState(roomId: string) {
       id: p.id,
       nickname: p.nickname,
       segments: p.segments,
-      score: p.score
+      score: p.score,
+      isDead: p.isDead || false
     })),
     food: room.food,
-    gridSize: room.gridSize
+    gridSize: room.gridSize,
+    isGameOver: room.isGameOver || false
   };
   
   // Broadcast to all players in the room
@@ -278,8 +301,14 @@ wss.on('connection', (ws: WebSocket) => {
           const room = rooms.get(roomId);
           if (!room) return;
           
+          // Don't process direction changes if game is over
+          if (room.isGameOver) return;
+          
           const player = room.players.get(snakeWs.playerId);
           if (!player) return;
+          
+          // Don't allow dead players to change direction
+          if (player.isDead) return;
           
           // Prevent 180 degree turns
           if (player.direction === 'up' && direction === 'down') return;
