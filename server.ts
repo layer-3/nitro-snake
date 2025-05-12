@@ -345,7 +345,6 @@ async function broadcastGameState(roomId: string) {
       snakeClient.send(JSON.stringify(gameState));
     }
   });
-}
 
 // WebSocket connection handler
 wss.on('connection', (ws: WebSocket) => {
@@ -354,7 +353,7 @@ wss.on('connection', (ws: WebSocket) => {
   const snakeWs = ws as SnakeWebSocket;
   snakeWs.playerId = randomBytes(8).toString('hex');
   
-  snakeWs.on('message', (message) => {
+  snakeWs.on('message', async (message) => {
     try {
       const data = JSON.parse(message.toString());
       
