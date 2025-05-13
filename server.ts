@@ -1,13 +1,33 @@
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import axios from 'axios';
 import express from 'express';
 import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
+import { ethers } from 'ethers';
 
 // Load environment variables from .env file
 dotenv.config();
+
+// Helper function to verify a signature
+async function verifySignature(signature: string, state: any, address: string): Promise<boolean> {
+  try {
+    // Create a hash of the state
+    const stateString = JSON.stringify(state);
+    const prefixedState = `nitro-state:${stateString}`;
+    const stateHash = createHash('sha256').update(prefixedState).digest('hex');
+    
+    // Recover the signer address from the signature
+    const recoveredAddress = ethers.verifyMessage(stateHash, signature);
+    
+    // Compare the recovered address with the claimed address
+    return recoveredAddress.toLowerCase() === address.toLowerCase();
+  } catch (error) {
+    console.error('Error verifying signature:', error);
+    return false;
+  }
+}
 
 interface SnakeWebSocket extends WebSocket {
   playerId: string;
@@ -204,6 +224,143 @@ app.get('/api/channels/:channelId', async (req, res) => {
   } catch (error) {
     console.error(`Error getting channel ${channelId}:`, error);
     res.status(500).json({ error: 'Failed to get channel details' });
+  }
+});
+
+// State update endpoint for channel
+app.post('/api/channels/:channelId/state', async (req, res) => {
+  const { channelId } = req.params;
+  const { state, signature, address } = req.body;
+  
+  if (!signature || !state || !address) {
+    return res.status(400).json({ error: 'Missing required parameters' });
+  }
+  
+  try {
+    // Verify the signature using cryptographic methods
+    const isValidSignature = await verifySignature(signature, state, address);
+    
+    if (!isValidSignature) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+    
+    // Find which room this channel belongs to
+    let foundRoom = null;
+    for (const [roomId, room] of rooms.entries()) {
+      if (room.channelIds.has(channelId)) {
+        foundRoom = room;
+        break;
+      }
+    }
+    
+    if (!foundRoom) {
+      return res.status(404).json({ error: 'Room not found for this channel' });
+    }
+    
+    // Get current channel info
+    const channelInfo = await clearNetRPC.getChannelInfo(channelId);
+    
+    if (!channelInfo) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+    
+    // Create a new state with updated signatures
+    const updatedSignatures = {
+      ...(channelInfo.signatures || {}),
+      [address]: signature
+    };
+    
+    const updatedState = {
+      ...state,
+      signatures: updatedSignatures
+    };
+    
+    // Submit the updated state to ClearNet RPC
+    const success = await clearNetRPC.submitState(channelId, updatedState);
+    
+    if (!success) {
+      return res.status(500).json({ error: 'Failed to update channel state' });
+    }
+    
+    // Return the updated state
+    res.json({
+      channelId,
+      state: updatedState,
+      signaturesCount: Object.keys(updatedSignatures).length
+    });
+  } catch (error) {
+    console.error(`Error updating state for channel ${channelId}:`, error);
+    res.status(500).json({ error: 'Failed to update channel state' });
+  }
+});
+
+// Join an existing channel
+app.post('/api/channels/:channelId/join', async (req, res) => {
+  const { channelId } = req.params;
+  const { signature, state, address } = req.body;
+  
+  if (!signature || !state || !address) {
+    return res.status(400).json({ error: 'Missing required parameters' });
+  }
+  
+  try {
+    // Verify the signature using cryptographic methods 
+    // This ensures the request is authorized by the address owner
+    const isValidSignature = await verifySignature(signature, state, address);
+    
+    if (!isValidSignature) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+    
+    // Get channel info from ClearNet RPC
+    const channelInfo = await clearNetRPC.getChannelInfo(channelId);
+    
+    if (!channelInfo) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+    
+    // Find which room this channel belongs to
+    let foundRoom = null;
+    for (const [roomId, room] of rooms.entries()) {
+      if (room.channelIds.has(channelId)) {
+        foundRoom = room;
+        break;
+      }
+    }
+    
+    if (!foundRoom) {
+      return res.status(404).json({ error: 'Room not found for this channel' });
+    }
+    
+    // Add the signature to the channel state
+    const updatedState = {
+      ...state,
+      signatures: {
+        ...(channelInfo.signatures || {}),
+        [address]: signature
+      }
+    };
+    
+    // Update the channel info in ClearNet RPC
+    // Use the existing endpoint for submitting state 
+    const success = await clearNetRPC.submitState(channelId, updatedState);
+    
+    if (!success) {
+      return res.status(500).json({ error: 'Failed to update channel state' });
+    }
+    
+    // Return the updated channel info
+    res.json({
+      channelId,
+      state: updatedState,
+      room: {
+        id: foundRoom.id,
+        playerCount: foundRoom.players.size
+      }
+    });
+  } catch (error) {
+    console.error(`Error joining channel ${channelId}:`, error);
+    res.status(500).json({ error: 'Failed to join channel' });
   }
 });
 
