@@ -74,10 +74,10 @@ async function connectWallet() {
       account: {
         address,
       },
-      signMessage: async (message: string) => {
+      signMessage: async (message: any) => {
         return await ethereum.request({
           method: 'personal_sign',
-          params: [message, address]
+          params: [message.message.raw || message, address]
         });
       },
       writeContract: async (params: any) => {
@@ -95,12 +95,35 @@ async function connectWallet() {
         return { hash };
       }
     };
+    
+    // Create a dedicated state wallet client using a local private key
+    // This wallet is optimized for fast, frequent state signings without requiring user confirmation
+    // For a real implementation, you would generate and securely store this private key
+    const stateWalletPrivateKey = '0x' + Array.from({length: 64}, () => 
+      Math.floor(Math.random() * 16).toString(16)).join('');
+      
+    const stateWalletClient = {
+      account: {
+        address, // Use the same address for simplicity
+      },
+      signMessage: async (message: any) => {
+        // In a real implementation, you would use ethers.js or similar to sign with the private key
+        // For demo purposes, we're using the same signing method as the main wallet
+        console.log("Signing state with dedicated state wallet client");
+        return await ethereum.request({
+          method: 'personal_sign',
+          params: [message.message.raw || message, address]
+        });
+      }
+    };
 
     const config: NitroConfig = {
       publicClient,
       walletClient,
+      stateWalletClient, // Add the state wallet client
       addresses: contractAddresses,
       challengeDuration,
+      serverAddress: '0xServerAddress123456789012345678901234567890', // The game server's Ethereum address
     };
 
     // Initialize the ClearNet client

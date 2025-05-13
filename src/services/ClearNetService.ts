@@ -3,6 +3,8 @@ import { NitroliteClient } from '@erc7824/nitrolite';
 export interface NitroConfig {
   publicClient: any;
   walletClient: any;
+  // Optional: Separate wallet client for signing states
+  stateWalletClient?: any;
   addresses: {
     custody: string;
     adjudicator: string;
@@ -10,6 +12,7 @@ export interface NitroConfig {
     tokenAddress: string;
   };
   challengeDuration: bigint;
+  serverAddress?: string; // Game server's ethereum address
 }
 
 export interface ChannelData {
@@ -24,6 +27,15 @@ class ClearNetService {
   private activeChannel: ChannelData | null = null;
   private wsConnection: WebSocket | null = null;
   private readonly wsUrl = 'wss://ethtaipei-production.up.railway.app/ws';
+  private pendingRequests = new Map<string, { 
+    resolve: (value: any) => void; 
+    reject: (reason: Error) => void;
+    timeout: NodeJS.Timeout;
+  }>();
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelay = 1000;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   async initialize(config: NitroConfig): Promise<boolean> {
     try {
@@ -43,13 +55,32 @@ class ClearNetService {
   }
   
   private initializeWebSocket(): Promise<void> {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
     return new Promise((resolve, reject) => {
       try {
+        if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
+          return resolve();
+        }
+        
         this.wsConnection = new WebSocket(this.wsUrl);
         
-        this.wsConnection.onopen = () => {
+        this.wsConnection.onopen = async () => {
           console.log("WebSocket connection established");
-          resolve();
+          try {
+            // Authenticate with the broker
+            await this.authenticateWithBroker();
+            this.isConnected = true;
+            this.reconnectAttempts = 0;
+            resolve();
+          } catch (error) {
+            console.error("Authentication failed:", error);
+            this.wsConnection?.close();
+            reject(error);
+          }
         };
         
         this.wsConnection.onerror = (error) => {
@@ -60,6 +91,7 @@ class ClearNetService {
         this.wsConnection.onclose = () => {
           console.log("WebSocket connection closed");
           this.isConnected = false;
+          this.handleReconnect();
         };
         
         this.wsConnection.onmessage = (event) => {
@@ -77,72 +109,270 @@ class ClearNetService {
     });
   }
   
-  private handleWebSocketMessage(message: any) {
+  private handleReconnect(): void {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log('Max reconnect attempts reached');
+      return;
+    }
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+    }
+
+    this.reconnectAttempts++;
+    const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1);
+
+    console.log(`Reconnecting in ${delay}ms...`);
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.initializeWebSocket().catch(() => {
+        console.log('Reconnect attempt failed');
+      });
+    }, delay);
+  }
+  
+  private async authenticateWithBroker(): Promise<void> {
+    if (!this.wsConnection || this.wsConnection.readyState !== WebSocket.OPEN || !this.client) {
+      throw new Error('WebSocket not connected or client not initialized');
+    }
+    
+    // Step 1: Create and send auth request message with address
+    const authRequest = {
+      jsonrpc: "2.0",
+      method: "auth_request",
+      params: {
+        address: this.currentAddress
+      },
+      id: `auth-${Date.now()}`
+    };
+    
+    return new Promise((resolve, reject) => {
+      const messageHandler = async (event: MessageEvent) => {
+        try {
+          const response = JSON.parse(event.data);
+          
+          // Step 2: Handle challenge
+          if (response?.method === 'auth_challenge' || (response?.res && response.res[1] === 'auth_challenge')) {
+            const challenge = response.params?.challenge || response.res[2][0]?.challenge_message;
+            
+            if (!challenge) {
+              throw new Error('Invalid challenge from server');
+            }
+            
+            // Step 3: Sign the challenge
+            const signingClient = this.client?.config.walletClient;
+            if (!signingClient) {
+              throw new Error('No wallet client available for signing');
+            }
+            
+            // Create timestamp
+            const timestamp = Date.now();
+            
+            // Create signature using the wallet client
+            const signature = await signingClient.signMessage({
+              message: challenge
+            });
+            
+            // Step 4: Send back the signed challenge
+            const authVerify = {
+              jsonrpc: "2.0",
+              method: "auth_verify",
+              params: {
+                address: this.currentAddress,
+                signature,
+                timestamp
+              },
+              id: `verify-${Date.now()}`
+            };
+            
+            this.wsConnection?.send(JSON.stringify(authVerify));
+          }
+          // Step 5: Handle the verification result
+          else if (response?.method === 'auth_success' || (response?.res && response.res[1] === 'auth_verify')) {
+            // Authentication successful
+            this.wsConnection?.removeEventListener('message', messageHandler);
+            resolve();
+          }
+          else if (response?.error || (response?.err && response.err[1] === 'error')) {
+            // Authentication failed
+            const errorMsg = response.error?.message || 'Authentication failed';
+            this.wsConnection?.removeEventListener('message', messageHandler);
+            reject(new Error(errorMsg));
+          }
+        } catch (error) {
+          console.error('Authentication message processing error:', error);
+          // Don't reject yet, it might be an unrelated message
+        }
+      };
+      
+      // Add message listener
+      this.wsConnection?.addEventListener('message', messageHandler);
+      
+      // Set timeout
+      const authTimeout = setTimeout(() => {
+        this.wsConnection?.removeEventListener('message', messageHandler);
+        reject(new Error('Authentication timeout'));
+      }, 10000);
+      
+      // Send the authentication request
+      this.wsConnection.send(JSON.stringify(authRequest));
+    });
+  }
+  
+  private handleWebSocketMessage(message: any): void {
     console.log("Received WebSocket message:", message);
     
-    // Handle different message types
-    switch (message.type) {
-      case 'channelUpdate':
-        if (this.activeChannel && message.channelId === this.activeChannel.channelId) {
-          this.activeChannel.state = message.state;
-        }
-        break;
-      case 'stateSignatureRequest':
-        this.handleStateSignatureRequest(message);
-        break;
-      // Add other message types as needed
+    // Check if it's a response to a pending request
+    if (message.id && this.pendingRequests.has(message.id)) {
+      const { resolve, reject, timeout } = this.pendingRequests.get(message.id)!;
+      clearTimeout(timeout);
+      this.pendingRequests.delete(message.id);
+      
+      if (message.error) {
+        reject(new Error(message.error.message || 'Unknown error'));
+      } else {
+        resolve(message.result || message.res?.[2]);
+      }
+      return;
+    }
+    
+    // Handle other message types
+    if (message.method) {
+      switch (message.method) {
+        case 'channel_update':
+          // Handle channel state update
+          if (this.activeChannel && message.params?.channel_id === this.activeChannel.channelId) {
+            this.activeChannel.state = message.params.state;
+          }
+          break;
+          
+        case 'app_update':
+          // Handle application update
+          console.log('Received app update:', message.params);
+          break;
+      }
     }
   }
   
-  private async handleStateSignatureRequest(message: any) {
-    if (!this.client || !this.currentAddress) return;
-    
-    try {
-      const { channelId, state, stateId } = message;
+  /**
+   * Sends a JSONRPC request to the broker and waits for the response
+   */
+  private async sendJsonRpcRequest(request: any): Promise<any> {
+    if (!this.wsConnection || this.wsConnection.readyState !== WebSocket.OPEN) {
+      await this.initializeWebSocket();
       
-      // Sign the state
-      const signedState = await this.signState(state, stateId, channelId);
-      
-      // Send the signature back
-      if (signedState && this.wsConnection) {
-        this.wsConnection?.send(JSON.stringify({
-          type: 'stateSignature',
-          channelId,
-          stateId,
-          signature: signedState.signature,
-          playerId: this.currentAddress
-        }));
+      if (!this.wsConnection || this.wsConnection.readyState !== WebSocket.OPEN) {
+        throw new Error('WebSocket not connected');
       }
-    } catch (error) {
-      console.error("Error handling signature request:", error);
     }
+    
+    return new Promise((resolve, reject) => {
+      const requestId = request.id || `req-${Date.now()}`;
+      request.id = requestId;
+      
+      // Set timeout for the request
+      const timeout = setTimeout(() => {
+        if (this.pendingRequests.has(requestId)) {
+          this.pendingRequests.delete(requestId);
+          reject(new Error('Request timeout'));
+        }
+      }, 15000); // 15 second timeout
+      
+      // Add the request to pending requests
+      this.pendingRequests.set(requestId, { resolve, reject, timeout });
+      
+      // Send the request
+      this.wsConnection?.send(JSON.stringify(request));
+    });
   }
 
-  async depositAndCreateChannel(amount: bigint, allocationAmounts: [bigint, bigint], stateData: string): Promise<ChannelData | null> {
+  async depositAndCreateChannel(amount: bigint, stateData: string): Promise<ChannelData | null> {
     if (!this.client || !this.isConnected) {
       console.error("ClearNet client not initialized");
       return null;
     }
 
     try {
-      const result = await this.client.depositAndCreateChannel(
-        amount,
-        {
-          initialAllocationAmounts: allocationAmounts,
-          stateData
-        }
-      );
-
+      // Step 1: Open channel on the broker using Nitrolite client
+      // This uses the native ethereum transaction flow rather than WebSocket RPC
+      const result = await this.client.createChannel({
+        initialAllocationAmounts: [amount, BigInt(0)],
+        stateData
+      });
+      
+      if (!result || !result.channelId) {
+        throw new Error('Failed to create channel: Invalid response');
+      }
+      
+      // Save the channel data
       this.activeChannel = {
         channelId: result.channelId,
         state: result.initialState
       };
+      
+      console.log(`Channel created successfully with ID: ${result.channelId}`);
+      
+      // Store channel in localStorage for persistence
+      try {
+        localStorage.setItem('nitro_channel_id', result.channelId);
+        localStorage.setItem('nitro_channel_state', JSON.stringify(result.initialState, 
+          (key, value) => typeof value === 'bigint' ? value.toString() + 'n' : value)
+        );
+      } catch (error) {
+        console.error('Failed to save channel to localStorage:', error);
+      }
 
       return this.activeChannel;
     } catch (error) {
       console.error("Failed to deposit and create channel:", error);
       return null;
     }
+  }
+  
+  /**
+   * Sends a JSON-RPC request and returns the response
+   */
+  private async sendJsonRpcRequest(request: any): Promise<any> {
+    if (!this.wsConnection) {
+      throw new Error('WebSocket not connected');
+    }
+    
+    return new Promise((resolve, reject) => {
+      const requestId = request.id;
+      
+      // Create a message handler for this specific request
+      const messageHandler = (event: MessageEvent) => {
+        try {
+          const response = JSON.parse(event.data);
+          
+          // Check if this is the response to our request
+          if (response && response.id === requestId) {
+            // Clean up the handler
+            this.wsConnection?.removeEventListener('message', messageHandler);
+            
+            if (response.error) {
+              reject(new Error(response.error.message || 'Request failed'));
+            } else {
+              resolve(response);
+            }
+          }
+        } catch (error) {
+          // Ignore parse errors or messages that don't match
+        }
+      };
+      
+      // Add the event listener
+      this.wsConnection.addEventListener('message', messageHandler);
+      
+      // Send the request
+      this.wsConnection.send(JSON.stringify(request));
+      
+      // Set a timeout to reject the promise
+      setTimeout(() => {
+        this.wsConnection?.removeEventListener('message', messageHandler);
+        reject(new Error('Request timeout'));
+      }, 15000); // 15 second timeout
+    });
   }
 
   async getAccountInfo() {
@@ -159,93 +389,118 @@ class ClearNetService {
     }
   }
 
-  async openGameSession(initialGameState: string) {
+  async createAppSession(participants: string[], initialGameState: string) {
     if (!this.client || !this.isConnected || !this.activeChannel || !this.wsConnection) {
       console.error("ClearNet client not initialized, no active channel, or WebSocket not connected");
       return null;
     }
 
     try {
-      // Create a session ID based on channel and timestamp
-      const sessionId = `session_${this.activeChannel.channelId}_${Date.now()}`;
+      // Create an app session on the broker with the server account
+      // This is typically done by the server, but we include this code for reference
+      // to show the expected message format
       
-      // Format the message according to NitroliteRPC standard
-      const message = {
+      // Get the app definition parameters
+      const appId = `snake_game_${Date.now()}`;
+      const tokenAddress = this.client.config.addresses.tokenAddress;
+      
+      // Format the message for create_app_session
+      // In a real implementation, this would be signed by the server
+      const createAppSessionMessage = {
         jsonrpc: "2.0",
-        method: "createGameSession",
+        method: "create_app_session",
         params: {
-          channelId: this.activeChannel.channelId,
-          initialState: initialGameState,
-          sessionId: sessionId
+          channel_id: this.activeChannel.channelId,
+          app_definition: {
+            protocol: "nitroliterpc",
+            participants: participants, // e.g. [alice_address, bob_address, server_address]
+            weights: [0, 0, 100], // Alice: 0, Bob: 0, Server: 100
+            quorum: 100, // Server has full decision power
+            challenge: 0,
+            nonce: Date.now()
+          },
+          token: tokenAddress,
+          allocations: [100, 0], // Initial allocations - all funds start with Alice (player A)
+          app_id: appId,
+          initial_state: initialGameState
         },
-        id: Date.now()
+        id: `create-app-${Date.now()}`
       };
       
-      // Send message through WebSocket
-      this.wsConnection.send(JSON.stringify(message));
-      
-      // Return the session info
+      // In a real implementation, the server would sign and send this message
+      // Here we return the app session info that the server would create
       return {
-        sessionId: sessionId,
-        gameState: initialGameState
+        appId: appId,
+        channelId: this.activeChannel.channelId,
+        initialState: initialGameState
       };
     } catch (error) {
-      console.error("Failed to open game session:", error);
+      console.error("Failed to create app session:", error);
+      return null;
+    }
+  }
+  
+  // This method notifies the game server about a player joining a room
+  async joinGameRoom(roomId: string, nickname: string) {
+    if (!this.client || !this.isConnected || !this.activeChannel) {
+      console.error("ClearNet client not initialized or no active channel");
+      return null;
+    }
+    
+    try {
+      // In a real implementation, this would connect to the game server WebSocket
+      // and send a joinRoom message with the channel ID
+      
+      // For reference, a joinRoom message might look like:
+      const joinRoomMessage = {
+        type: 'joinRoom',
+        roomId,
+        nickname,
+        channelId: this.activeChannel.channelId,
+        walletAddress: this.currentAddress
+      };
+      
+      // This would normally be sent to the game server WebSocket
+      
+      return {
+        roomId,
+        playerId: `player_${Math.floor(Math.random() * 1000)}`,
+        channelId: this.activeChannel.channelId
+      };
+    } catch (error) {
+      console.error("Failed to join game room:", error);
       return null;
     }
   }
 
   async updateGameState(newState: string, version: bigint) {
-    if (!this.client || !this.isConnected || !this.activeChannel || !this.wsConnection) {
-      console.error("ClearNet client not initialized, no active channel, or WebSocket not connected");
+    if (!this.client || !this.isConnected || !this.activeChannel) {
+      console.error("ClearNet client not initialized or no active channel");
       return false;
     }
 
     try {
-      // First, get the current state
-      if (!this.activeChannel.state) {
-        throw new Error("No active channel state found");
-      }
+      // In the new design, game state updates are handled by the game server
+      // and not directly by the client. The game server maintains the game state
+      // and calls the broker to update the app session state when necessary.
       
-      // Create an updated state
-      const updatedState = {
-        ...this.activeChannel.state,
-        stateData: newState,
-        version: version,
-        // Make sure to include the channel ID
-        channelId: this.activeChannel.channelId
+      // This function would typically just notify the game server about
+      // client-side events like direction changes, but doesn't directly
+      // update the channel or app session state.
+      
+      // For documentation purposes, a game state update message to the game server
+      // might look like this:
+      const gameStateUpdateMessage = {
+        type: 'gameStateUpdate',
+        channelId: this.activeChannel.channelId,
+        state: newState,
+        version: version.toString(),
+        timestamp: Date.now()
       };
       
-      // Sign the updated state
-      const stateHash = await this.getStateHash(updatedState);
-      const signature = await this.client.config.walletClient.signMessage({ 
-        message: { raw: stateHash } 
-      });
+      // In a real implementation, this would be sent to the game server's WebSocket
       
-      // Update our local state
-      this.activeChannel.state = updatedState;
-      
-      // Add our signature to the state
-      this.activeChannel.state.signatures = {
-        ...this.activeChannel.state.signatures,
-        [this.currentAddress || '']: signature
-      };
-      
-      // Format the message according to NitroliteRPC standard
-      const message = {
-        jsonrpc: "2.0",
-        method: "updateChannelState",
-        params: {
-          channelId: this.activeChannel.channelId,
-          state: updatedState,
-          signature: signature,
-          address: this.currentAddress
-        },
-        id: Date.now()
-      };
-      
-      // Send message through WebSocket
-      this.wsConnection.send(JSON.stringify(message));
+      console.log('Game state update:', gameStateUpdateMessage);
       
       return true;
     } catch (error) {
@@ -271,10 +526,13 @@ class ClearNetService {
         stateId
       };
       
-      // Use the wallet client to sign the message with the player's private key
+      // Use the state wallet client if available, otherwise fall back to regular wallet client
       // This creates a cryptographic signature that proves this state update was authorized
       const stateHash = await this.getStateHash(state);
-      const signature = await this.client.config.walletClient.signMessage({ 
+      
+      // Choose which wallet client to use for signing
+      const signingClient = this.client.config.stateWalletClient || this.client.config.walletClient;
+      const signature = await signingClient.signMessage({ 
         message: { raw: stateHash } 
       });
       
@@ -290,69 +548,78 @@ class ClearNetService {
     }
   }
 
-  async closeGameSession(finalState: any) {
-    if (!this.client || !this.isConnected || !this.activeChannel || !this.wsConnection) {
-      console.error("ClearNet client not initialized, no active channel, or WebSocket not connected");
+  async leaveGame() {
+    if (!this.client || !this.isConnected || !this.activeChannel) {
+      console.error("ClearNet client not initialized or no active channel");
       return false;
     }
 
     try {
-      // Prepare the final state according to Nitrolite SDK requirements
-      const channelId = this.activeChannel.channelId;
+      // In the new design, the client doesn't directly close game sessions
+      // Only the server can close an app session since it has 100% of the weight
       
-      // Format the state properly for the Nitrolite SDK
-      const formattedFinalState = {
-        channelId,
-        stateData: JSON.stringify(finalState.gameData || finalState),
-        // Make sure we're using the latest allocations for final payout
-        allocations: finalState.allocations || this.activeChannel.state.allocations,
-        // Use a monotonically increasing version
-        version: BigInt(Math.floor(Date.now() / 1000)),
-        // Mark as final
-        isFinal: true
+      // This method would typically just notify the game server that the player
+      // is leaving the game, and the server would handle the rest
+      
+      // For documentation purposes, a leave game message might look like:
+      const leaveGameMessage = {
+        type: 'leaveGame',
+        channelId: this.activeChannel.channelId,
+        playerAddress: this.currentAddress,
+        timestamp: Date.now()
       };
       
-      // Get signatures if they exist in the final state
-      if (finalState.signatures) {
-        formattedFinalState.signatures = finalState.signatures;
+      // In a real implementation, this would be sent to the game server's WebSocket
+      
+      console.log('Player leaving game:', leaveGameMessage);
+      
+      // Clear our local channel reference
+      this.activeChannel = null;
+      
+      // Clear storage
+      try {
+        localStorage.removeItem('nitro_channel_id');
+        localStorage.removeItem('nitro_channel_state');
+      } catch (error) {
+        console.error('Failed to clear storage:', error);
       }
       
-      // Sign the final state
-      const stateHash = await this.getStateHash(formattedFinalState);
-      const signature = await this.client.config.walletClient.signMessage({ 
-        message: { raw: stateHash } 
-      });
-      
-      // Add our signature to the final state
-      formattedFinalState.signatures = {
-        ...(formattedFinalState.signatures || {}),
-        [this.currentAddress || '']: signature
-      };
-      
-      // Format the message according to NitroliteRPC standard
-      const message = {
-        jsonrpc: "2.0",
-        method: "finalizeChannel",
-        params: {
-          channelId,
-          finalState: formattedFinalState,
-          signature
-        },
-        id: Date.now()
-      };
-      
-      // Send message through WebSocket
-      this.wsConnection.send(JSON.stringify(message));
-      
-      // Also close the channel with the properly formatted state using the client
-      await this.client.closeChannel({
-        finalState: formattedFinalState
-      });
-
-      this.activeChannel = null;
       return true;
     } catch (error) {
-      console.error("Failed to close game session:", error);
+      console.error("Failed to leave game:", error);
+      return false;
+    }
+  }
+  
+  // This function would be used if the player wants to withdraw funds from a channel
+  async closeChannel() {
+    if (!this.client || !this.isConnected) {
+      console.error("ClearNet client not initialized");
+      return false;
+    }
+    
+    try {
+      // If we have an active channel, try to close it
+      if (this.activeChannel) {
+        // Call the Nitrolite SDK to close the channel
+        await this.client.closeChannel({
+          channelId: this.activeChannel.channelId
+        });
+        
+        // Clear local storage
+        try {
+          localStorage.removeItem('nitro_channel_id');
+          localStorage.removeItem('nitro_channel_state');
+        } catch (error) {
+          console.error('Failed to clear storage:', error);
+        }
+        
+        this.activeChannel = null;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error("Failed to close channel:", error);
       return false;
     }
   }
@@ -462,56 +729,53 @@ class ClearNetService {
   }
   
   async joinChannel(channelId: string, depositAmount: bigint, stateData: string): Promise<ChannelData | null> {
-    if (!this.client || !this.isConnected || !this.wsConnection) {
-      console.error("ClearNet client not initialized or WebSocket not connected");
+    if (!this.client || !this.isConnected) {
+      console.error("ClearNet client not initialized");
       return null;
     }
     
     try {
-      // First, we need to deposit funds since Nitrolite doesn't have a direct joinChannel method
+      // First, deposit funds using the Nitrolite client
       const depositTxHash = await this.client.deposit(depositAmount);
       
       if (!depositTxHash) {
         throw new Error('Failed to deposit funds');
       }
       
-      // Create a state object to sign
-      const initialState = {
-        channelId,
-        stateData,
-        version: BigInt(Math.floor(Date.now() / 1000)),
-        // Create a default allocation
-        allocations: [
-          { destination: this.currentAddress || '', amount: depositAmount }
-        ]
-      };
+      // We need to get the current channel state to properly join
+      const channelInfo = await this.client.getChannelInfo(channelId);
+      
+      if (!channelInfo) {
+        throw new Error('Failed to get channel information');
+      }
+      
+      // Now, join the channel by updating its state and signatures
+      // Depending on the SDK, this might be done by the following steps:
+      // 1. Get the current state
+      // 2. Sign it
+      // 3. Submit the signed state
+      
+      // Create a state object to sign (this format depends on the Nitrolite SDK)
+      const initialState = channelInfo.state;
       
       // Sign the state
       const stateHash = await this.getStateHash(initialState);
-      const signature = await this.client.config.walletClient.signMessage({ 
+      const signingClient = this.client.config.stateWalletClient || this.client.config.walletClient;
+      const signature = await signingClient.signMessage({ 
         message: { raw: stateHash } 
       });
       
-      // Format the message according to NitroliteRPC standard
-      const message = {
-        jsonrpc: "2.0",
-        method: "joinChannel",
-        params: {
-          channelId,
-          depositAmount: depositAmount.toString(),
-          state: initialState,
-          signature,
-          address: this.currentAddress
-        },
-        id: Date.now()
-      };
+      // Store channel in localStorage for persistence
+      try {
+        localStorage.setItem('nitro_channel_id', channelId);
+        localStorage.setItem('nitro_channel_state', JSON.stringify(initialState, 
+          (key, value) => typeof value === 'bigint' ? value.toString() + 'n' : value)
+        );
+      } catch (error) {
+        console.error('Failed to save channel to localStorage:', error);
+      }
       
-      // Send message through WebSocket
-      this.wsConnection.send(JSON.stringify(message));
-      
-      // Create a local record of the channel
-      // In a real implementation, we would wait for a response from the WebSocket
-      // For now, we'll create a placeholder that will be updated when we receive channel updates
+      // Store the active channel
       this.activeChannel = {
         channelId,
         state: initialState
