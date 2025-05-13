@@ -36,3 +36,17 @@ export interface PendingRequest {
   reject: Function;
   timeout: NodeJS.Timeout;
 }
+
+export interface RPCRequest {
+  req: [number, string, any[], number]; // [requestId, method, params, timestamp]
+  sig: string[];
+}
+
+export interface RPCResponse {
+  res: [number, string, any[], number]; // [requestId, method, params, timestamp]
+  sig: string[];
+}
+
+export interface ChallengeData {
+  challenge_message: string;
+}

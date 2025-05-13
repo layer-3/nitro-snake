@@ -7,14 +7,14 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "server": "npx tsx server.ts"
+    "server": "npx tsx server/server.ts"
   },
   "dependencies": {
     "@erc7824/nitrolite": "^0.0.46-alpha",
     "axios": "^1.9.0",
     "body-parser": "^2.2.0",
     "dotenv": "^16.5.0",
-    "ethers": "^6.14.0",
+    "ethers": "5.7.2",
     "express": "^5.1.0",
     "fastify": "^5.3.2",
     "vue": "^3.5.13",

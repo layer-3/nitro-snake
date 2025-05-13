@@ -1,12 +1,12 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
 import { ethers } from 'ethers';
-import { SnakeWebSocket } from '../interfaces';
+import { Room, SnakeWebSocket } from '../interfaces';
 import { getRoom, addRoom, removeRoom } from './stateService';
-import { 
-  generateRoomId, 
-  generateFood, 
-  initializePlayer, 
+import {
+  generateRoomId,
+  generateFood,
+  initializePlayer,
   gameTick,
   clearNetRPC,
   initializeBroadcastFunction
@@ -26,10 +26,10 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('Client connected');
-    
+
     const snakeWs = ws as SnakeWebSocket;
     snakeWs.playerId = randomBytes(8).toString('hex');
-    
+
     snakeWs.on('message', async (message) => {
       try {
         const data = JSON.parse(message.toString());
@@ -38,7 +38,7 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
         console.error('Error handling message:', error);
       }
     });
-    
+
     snakeWs.on('close', async () => {
       await handleDisconnect(snakeWs);
     });
@@ -67,12 +67,12 @@ async function handleWebSocketMessage(ws: SnakeWebSocket, data: any): Promise<vo
       await handleCreateRoom(ws, data);
       break;
     }
-    
+
     case 'joinRoom': {
       await handleJoinRoom(ws, data);
       break;
     }
-    
+
     case 'changeDirection': {
       await handleChangeDirection(ws, data);
       break;
@@ -82,7 +82,7 @@ async function handleWebSocketMessage(ws: SnakeWebSocket, data: any): Promise<vo
       await handlePlayAgain(ws, data);
       break;
     }
-    
+
     case 'finalizeGame': {
       await handleFinalizeGame(ws, data);
       break;
@@ -95,12 +95,12 @@ async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
   const roomId = generateRoomId();
   const { nickname, channelId, walletAddress } = data;
   const gridSize = { width: 40, height: 30 };
-  
+
   // Create player
   const player = initializePlayer(ws.playerId, nickname, gridSize);
-  
+
   // Create room with channel support
-  const room = {
+  const room: Room = {
     id: roomId,
     players: new Map([[player.id, player]]),
     food: generateFood(gridSize, new Map([[player.id, player]])),
@@ -112,25 +112,25 @@ async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
     stateVersion: 0,
     createdAt: Date.now()
   };
-  
+
   // Add channelId if provided
   if (channelId) {
     room.channelIds.add(channelId);
     ws.channelId = channelId;
   }
-  
+
   // Store the room
   addRoom(roomId, room);
-  
+
   ws.roomId = roomId;
-  
+
   // Respond with room info
   ws.send(JSON.stringify({
     type: 'roomCreated',
     roomId,
     playerId: player.id
   }));
-  
+
   console.log(`Room created: ${roomId}, Player: ${player.id}, Address: ${walletAddress}`);
 }
 
@@ -138,7 +138,7 @@ async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
 async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
   const { roomId, nickname, channelId, walletAddress } = data;
   const room = getRoom(roomId);
-  
+
   if (!room) {
     ws.send(JSON.stringify({
       type: 'error',
@@ -146,7 +146,7 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
     }));
     return;
   }
-  
+
   if (room.players.size >= 2) {
     ws.send(JSON.stringify({
       type: 'error',
@@ -154,71 +154,71 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
     }));
     return;
   }
-  
+
   // Create player
   const player = initializePlayer(ws.playerId, nickname, room.gridSize);
-  
+
   // Add player to room
   room.players.set(player.id, player);
   room.playerAddresses.set(player.id, walletAddress);
-  
+
   ws.roomId = roomId;
-  
+
   // Add channelId if provided
   if (channelId) {
     room.channelIds.add(channelId);
     ws.channelId = channelId;
   }
-  
+
   // Respond with room info
   ws.send(JSON.stringify({
     type: 'roomJoined',
     roomId,
     playerId: player.id
   }));
-  
+
   console.log(`Player joined room: ${roomId}, Player: ${player.id}, Address: ${walletAddress}`);
-  
+
   // If we have 2 players and a channel, create the app session
   if (room.players.size === 2 && room.channelIds.size > 0) {
     try {
       // Get the channel ID
       const channelId = Array.from(room.channelIds)[0];
-      
+
       // Get player addresses
       const playerAddresses = Array.from(room.playerAddresses.values());
-      
+
       // Create the app ID
       const appId = `snake_${roomId}_${Date.now()}`;
-      
+
       // Get the server's wallet address
       const wallet = new ethers.Wallet(SERVER_PRIVATE_KEY);
-      
+
       // Create the participants array with server as third participant
       const participants = [...playerAddresses, wallet.address];
-      
+
       // Create the app session
       const createdAppId = await createAppSession(
         channelId,
         participants,
         appId,
-        { 
+        {
           gameId: roomId,
           initialState: "game_started",
           timestamp: Date.now()
         }
       );
-      
+
       // Store the app ID in the room
       room.appId = createdAppId;
-      
+
       console.log(`Created app session ${createdAppId} for room ${roomId}`);
-      
+
       // Start the game
       room.gameInterval = setInterval(async () => {
         await gameTick(roomId);
       }, 150);
-      
+
       // Initial game state broadcast
       const gameState = {
         type: 'gameState',
@@ -235,15 +235,15 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
         stateVersion: ++room.stateVersion,
         timestamp: Date.now()
       };
-      
+
       // Store the current state in the room
       room.currentState = gameState;
-      
+
       // Broadcast to all players in the room
       broadcastGameState(roomId, gameState);
     } catch (error) {
       console.error(`Error creating app session for room ${roomId}:`, error);
-      
+
       ws.send(JSON.stringify({
         type: 'error',
         message: 'Failed to create app session'
@@ -256,27 +256,27 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
 async function handleChangeDirection(ws: SnakeWebSocket, data: any): Promise<void> {
   const roomId = ws.roomId;
   const { direction } = data;
-  
+
   if (!roomId) return;
-  
+
   const room = getRoom(roomId);
   if (!room) return;
-  
+
   // Don't process direction changes if game is over
   if (room.isGameOver) return;
-  
+
   const player = room.players.get(ws.playerId);
   if (!player) return;
-  
+
   // Don't allow dead players to change direction
   if (player.isDead) return;
-  
+
   // Prevent 180 degree turns
   if (player.direction === 'up' && direction === 'down') return;
   if (player.direction === 'down' && direction === 'up') return;
   if (player.direction === 'left' && direction === 'right') return;
   if (player.direction === 'right' && direction === 'left') return;
-  
+
   player.direction = direction;
 }
 
@@ -284,39 +284,39 @@ async function handleChangeDirection(ws: SnakeWebSocket, data: any): Promise<voi
 async function handlePlayAgain(ws: SnakeWebSocket, data: any): Promise<void> {
   const { roomId } = data;
   if (!roomId) return;
-  
+
   const room = getRoom(roomId);
   if (!room) return;
-  
+
   // Reset game state
   room.isGameOver = false;
-  
+
   // Reset players
   for (const player of room.players.values()) {
     const { width, height } = room.gridSize;
     const x = Math.floor(Math.random() * (width - 10)) + 5;
     const y = Math.floor(Math.random() * (height - 10)) + 5;
-    
+
     player.position = { x, y };
     player.direction = ['up', 'down', 'left', 'right'][Math.floor(Math.random() * 4)] as 'up' | 'down' | 'left' | 'right';
     player.segments = [{ x, y }];
     player.score = 0;
     player.isDead = false;
   }
-  
+
   // Create new food
   room.food = generateFood(room.gridSize, room.players);
-  
+
   // Reset state version
   room.stateVersion = 0;
-  
+
   // Restart game interval if needed
   if (!room.gameInterval) {
     room.gameInterval = setInterval(async () => {
       await gameTick(roomId);
     }, 150);
   }
-  
+
   // Create and broadcast initial game state
   const gameState = {
     type: 'gameState',
@@ -333,10 +333,10 @@ async function handlePlayAgain(ws: SnakeWebSocket, data: any): Promise<void> {
     stateVersion: ++room.stateVersion,
     timestamp: Date.now()
   };
-  
+
   // Store the current state in the room
   room.currentState = gameState;
-  
+
   // Broadcast to all players in the room
   broadcastGameState(roomId, gameState);
 }
@@ -345,18 +345,18 @@ async function handlePlayAgain(ws: SnakeWebSocket, data: any): Promise<void> {
 async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> {
   const roomId = ws.roomId;
   if (!roomId) return;
-  
+
   const room = getRoom(roomId);
   if (!room || !room.appId) return;
-  
+
   // For manual finalization - end the game immediately
   if (room.gameInterval) {
     clearInterval(room.gameInterval);
     room.gameInterval = null;
   }
-  
+
   room.isGameOver = true;
-  
+
   // Create and broadcast final game state
   const gameState = {
     type: 'gameState',
@@ -373,10 +373,10 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
     stateVersion: ++room.stateVersion,
     timestamp: Date.now()
   };
-  
+
   // Store the current state in the room
   room.currentState = gameState;
-  
+
   // Broadcast to all players in the room
   broadcastGameState(roomId, gameState);
 }
@@ -384,23 +384,23 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
 // Handle client disconnect
 async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
   console.log('Client disconnected');
-  
+
   const roomId = ws.roomId;
   const channelId = ws.channelId;
   if (!roomId) return;
-  
+
   const room = getRoom(roomId);
   if (!room) return;
-  
+
   // Remove player from room
   room.players.delete(ws.playerId);
-  
+
   // If room is empty, clean up
   if (room.players.size === 0) {
     if (room.gameInterval) {
       clearInterval(room.gameInterval);
     }
-    
+
     // Finalize any remaining channels
     if (room.channelIds.size > 0) {
       const finalState = {
@@ -416,11 +416,11 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
         finalizedAt: Date.now(),
         reason: 'room_closed'
       };
-      
-      const finalizePromises = Array.from(room.channelIds).map(id => 
+
+      const finalizePromises = Array.from(room.channelIds).map(id =>
         clearNetRPC.finalizeChannel(id, finalState)
       );
-      
+
       try {
         await Promise.all(finalizePromises);
         console.log(`Finalized all channels for closing room ${roomId}`);
@@ -428,14 +428,14 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
         console.error(`Error finalizing channels for room ${roomId}:`, error);
       }
     }
-    
+
     removeRoom(roomId);
     console.log(`Room deleted: ${roomId}`);
   } else {
     // If this client had a channel associated, mark the game as over
     if (channelId && room.channelIds.has(channelId)) {
       room.isGameOver = true;
-      
+
       // Finalize this channel
       try {
         const finalState = {
@@ -451,7 +451,7 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
           finalizedAt: Date.now(),
           reason: 'player_disconnected'
         };
-        
+
         await clearNetRPC.finalizeChannel(channelId, finalState);
         room.channelIds.delete(channelId);
         console.log(`Finalized channel ${channelId} due to player disconnect`);
@@ -459,7 +459,7 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
         console.error(`Error finalizing channel ${channelId}:`, error);
       }
     }
-    
+
     // Create updated game state
     const gameState = {
       type: 'gameState',
@@ -476,10 +476,10 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
       stateVersion: ++room.stateVersion,
       timestamp: Date.now()
     };
-    
+
     // Store the current state in the room
     room.currentState = gameState;
-    
+
     // Broadcast to all remaining players in the room
     broadcastGameState(roomId, gameState);
   }
