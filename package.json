@@ -12,6 +12,9 @@
   "dependencies": {
     "@erc7824/nitrolite": "^0.0.46-alpha",
     "axios": "^1.9.0",
+    "body-parser": "^2.2.0",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
     "fastify": "^5.3.2",
     "vue": "^3.5.13",
     "ws": "^8.16.0"

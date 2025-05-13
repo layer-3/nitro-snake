@@ -82,11 +82,33 @@ class ClearNetService {
       return null;
     }
 
-    // Mock implementation for demo purposes
-    return {
-      sessionId: `session_${Date.now()}`,
-      gameState: initialGameState
-    };
+    try {
+      // Send the initial game state to the server through WebSocket
+      // The server will handle creating the actual session
+      const response = await fetch('/api/game-sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          channelId: this.activeChannel.channelId,
+          initialState: initialGameState
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      return {
+        sessionId: data.sessionId,
+        gameState: initialGameState
+      };
+    } catch (error) {
+      console.error("Failed to open game session:", error);
+      return null;
+    }
   }
 
   async updateGameState(newState: string, version: bigint) {
@@ -110,11 +132,12 @@ class ClearNetService {
     }
 
     try {
-      // Mock signature for demo purposes
-      const mockSignature = `sig_${Date.now()}_${this.currentAddress?.substring(0, 8)}`;
+      // Use the Nitrolite client to sign the state
+      const stateString = JSON.stringify(stateData);
+      const signature = await this.client.signMessage(stateString);
       
       return {
-        signature: mockSignature,
+        signature,
         stateId,
         channelId,
         playerId: this.currentAddress
@@ -151,11 +174,54 @@ class ClearNetService {
     }
 
     try {
-      await this.client.withdrawal(amount);
+      // Ensure amount is valid 
+      if (amount <= 0n) {
+        throw new Error("Withdrawal amount must be greater than zero");
+      }
+      
+      // Check available balance first
+      const accountInfo = await this.client.getAccountInfo();
+      if (!accountInfo || accountInfo.available < amount) {
+        throw new Error("Insufficient balance for withdrawal");
+      }
+      
+      // Proceed with withdrawal
+      const withdrawalTx = await this.client.withdrawal(amount);
+      
+      // Log transaction details for easier tracking
+      console.log(`Withdrawal transaction initiated: ${withdrawalTx.hash || '(no hash)'}`);
+      console.log(`Withdrawn amount: ${amount.toString()}`);
+      console.log(`Account: ${this.currentAddress}`);
+      
       return true;
     } catch (error) {
       console.error("Failed to withdraw funds:", error);
       return false;
+    }
+  }
+  
+  // Get detailed channel information from ClearNet RPC
+  async getChannelDetails(channelId: string): Promise<any> {
+    if (!this.client || !this.isConnected) {
+      console.error("ClearNet client not initialized");
+      return null;
+    }
+    
+    try {
+      // Get channel details from the server
+      const response = await fetch(`/api/channels/${channelId}`, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to get channel details: ${response.status}`);
+      }
+      
+      const channelDetails = await response.json();
+      return channelDetails;
+    } catch (error) {
+      console.error(`Failed to get details for channel ${channelId}:`, error);
+      return null;
     }
   }
 
@@ -170,6 +236,36 @@ class ClearNetService {
     } catch (error) {
       console.error("Failed to get account channels:", error);
       return [];
+    }
+  }
+  
+  async joinChannel(channelId: string, depositAmount: bigint, stateData: string): Promise<ChannelData | null> {
+    if (!this.client || !this.isConnected) {
+      console.error("ClearNet client not initialized");
+      return null;
+    }
+    
+    try {
+      // Join an existing channel with a deposit
+      const result = await this.client.joinChannel({
+        channelId,
+        depositAmount,
+        stateData
+      });
+      
+      if (!result || !result.channelId) {
+        throw new Error('Failed to join channel');
+      }
+      
+      this.activeChannel = {
+        channelId: result.channelId,
+        state: result.state
+      };
+      
+      return this.activeChannel;
+    } catch (error) {
+      console.error("Failed to join channel:", error);
+      return null;
     }
   }
 

@@ -2,6 +2,12 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
 import axios from 'axios';
+import express from 'express';
+import bodyParser from 'body-parser';
+import dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
 
 interface SnakeWebSocket extends WebSocket {
   playerId: string;
@@ -29,6 +35,7 @@ interface Room {
   channelIds: Set<string>;
   currentState: any;
   stateVersion: number;
+  createdAt: number; // Timestamp when the room was created
   pendingSignatures: Map<string, { 
     channelId: string;
     state: any; 
@@ -97,8 +104,225 @@ const clearNetRPC = {
   }
 };
 
+// Create Express app
+const app = express();
+app.use(bodyParser.json());
+
+// Contract addresses endpoint
+app.get('/api/contract-addresses', (req, res) => {
+  // Return the real contract addresses from environment
+  res.json({
+    custody: process.env.CUSTODY_ADDRESS || '0x1234567890123456789012345678901234567890',
+    adjudicator: process.env.ADJUDICATOR_ADDRESS || '0x0987654321098765432109876543210987654321',
+    guestAddress: process.env.GUEST_ADDRESS || '0x2345678901234567890123456789012345678901', 
+    tokenAddress: process.env.TOKEN_ADDRESS || '0x3456789012345678901234567890123456789012'
+  });
+});
+
+// Get channels for a wallet address
+app.get('/api/channels', async (req, res) => {
+  const { walletAddress } = req.query;
+  
+  if (!walletAddress) {
+    return res.status(400).json({ error: 'Wallet address is required' });
+  }
+  
+  try {
+    // Get channels from ClearNet RPC associated with this wallet address
+    const response = await axios.get(`${CLEARNET_RPC_URL}/accounts/${walletAddress}/channels`, {
+      headers: { 'X-API-Key': CLEARNET_API_KEY }
+    });
+    
+    if (response.status !== 200) {
+      throw new Error(`ClearNet RPC returned status ${response.status}`);
+    }
+    
+    const channels = response.data;
+    
+    // Find active rooms for these channels
+    const channelsWithRooms = channels.map((channel: any) => {
+      let roomId = null;
+      let isActive = false;
+      
+      for (const [id, room] of rooms.entries()) {
+        if (room.channelIds.has(channel.channelId)) {
+          roomId = id;
+          isActive = true;
+          break;
+        }
+      }
+      
+      return {
+        ...channel,
+        roomId,
+        isActive
+      };
+    });
+    
+    res.json(channelsWithRooms);
+  } catch (error) {
+    console.error('Error getting channels for wallet:', error);
+    res.status(500).json({ error: 'Failed to get channels' });
+  }
+});
+
+// Get details for a specific channel
+app.get('/api/channels/:channelId', async (req, res) => {
+  const { channelId } = req.params;
+  
+  try {
+    // Get channel info from ClearNet RPC
+    const channelInfo = await clearNetRPC.getChannelInfo(channelId);
+    
+    if (!channelInfo) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+    
+    // Find if this channel is part of an active room
+    let roomData = null;
+    
+    for (const [roomId, room] of rooms.entries()) {
+      if (room.channelIds.has(channelId)) {
+        roomData = {
+          id: roomId,
+          isGameOver: room.isGameOver || false,
+          stateVersion: room.stateVersion,
+          playerCount: room.players.size,
+          createdAt: room.createdAt
+        };
+        break;
+      }
+    }
+    
+    // Combine channel and room information
+    res.json({
+      channelId,
+      ...channelInfo,
+      room: roomData,
+      isActive: roomData !== null
+    });
+  } catch (error) {
+    console.error(`Error getting channel ${channelId}:`, error);
+    res.status(500).json({ error: 'Failed to get channel details' });
+  }
+});
+
+// Room channel endpoint
+app.get('/api/rooms/:roomId/channel', (req, res) => {
+  const roomId = req.params.roomId;
+  const room = rooms.get(roomId);
+  
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  
+  // Get the first channelId in the room
+  const channelIds = Array.from(room.channelIds);
+  if (channelIds.length === 0) {
+    return res.status(404).json({ error: 'No channel found for this room' });
+  }
+  
+  res.json({
+    channelId: channelIds[0],
+    roomId
+  });
+});
+
+// Game sessions endpoint
+app.post('/api/game-sessions', async (req, res) => {
+  const { channelId, initialState } = req.body;
+  
+  if (!channelId) {
+    return res.status(400).json({ error: 'Channel ID is required' });
+  }
+  
+  try {
+    // Check if channel exists in any room
+    let foundRoom = null;
+    for (const [roomId, room] of rooms.entries()) {
+      if (room.channelIds.has(channelId)) {
+        foundRoom = room;
+        break;
+      }
+    }
+    
+    if (!foundRoom) {
+      return res.status(404).json({ error: 'Channel not found in any active room' });
+    }
+    
+    // Create a session ID
+    const sessionId = `session_${randomBytes(8).toString('hex')}`;
+    
+    // Get channel info from ClearNet RPC
+    const channelInfo = await clearNetRPC.getChannelInfo(channelId);
+    
+    res.json({
+      sessionId,
+      channelId,
+      channelInfo
+    });
+  } catch (error) {
+    console.error('Error creating game session:', error);
+    res.status(500).json({ error: 'Failed to create game session' });
+  }
+});
+
+// Get game session channel state
+app.get('/api/game-sessions/:sessionId/state', async (req, res) => {
+  const { sessionId } = req.params;
+  
+  try {
+    // In a real implementation, we would look up the session by ID
+    // For now, extract the channelId from the sessionId format (session_<random>)
+    const channelId = req.query.channelId as string;
+    
+    if (!channelId) {
+      return res.status(400).json({ error: 'Channel ID is required as a query parameter' });
+    }
+    
+    // Get channel info from ClearNet RPC
+    const channelInfo = await clearNetRPC.getChannelInfo(channelId);
+    
+    if (!channelInfo) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+    
+    // Find the associated room
+    let foundRoom = null;
+    for (const room of rooms.values()) {
+      if (room.channelIds.has(channelId)) {
+        foundRoom = room;
+        break;
+      }
+    }
+    
+    if (!foundRoom) {
+      return res.status(404).json({ error: 'Room not found for this channel' });
+    }
+    
+    // Return the current state
+    res.json({
+      sessionId,
+      channelId,
+      roomId: foundRoom.id,
+      state: foundRoom.currentState,
+      isGameOver: foundRoom.isGameOver || false,
+      stateVersion: foundRoom.stateVersion,
+      players: Array.from(foundRoom.players.values()).map(p => ({
+        id: p.id,
+        nickname: p.nickname,
+        score: p.score,
+        isDead: p.isDead || false
+      }))
+    });
+  } catch (error) {
+    console.error('Error getting game session state:', error);
+    res.status(500).json({ error: 'Failed to get game session state' });
+  }
+});
+
 // Create HTTP server
-const server = createServer();
+const server = createServer(app);
 
 // Create WebSocket server
 const wss = new WebSocketServer({ server });
@@ -376,6 +600,7 @@ wss.on('connection', (ws: WebSocket) => {
             channelIds: new Set(),
             currentState: null,
             stateVersion: 0,
+            createdAt: Date.now(),
             pendingSignatures: new Map()
           };
           
@@ -593,6 +818,53 @@ wss.on('connection', (ws: WebSocket) => {
           break;
         }
         
+        case 'channelStateUpdate': {
+          const { channelId, stateVersion, stateData } = data;
+          if (!channelId || !stateVersion || !stateData) return;
+          
+          // Find the room for this channel
+          let foundRoom = null;
+          for (const room of rooms.values()) {
+            if (room.channelIds.has(channelId)) {
+              foundRoom = room;
+              break;
+            }
+          }
+          
+          if (!foundRoom) {
+            console.error(`No room found for channel ${channelId}`);
+            return;
+          }
+          
+          try {
+            // Process the state update
+            console.log(`Received state update for channel ${channelId} with version ${stateVersion}`);
+            
+            // Prepare the state for signature requests
+            const stateId = `${foundRoom.id}-${stateVersion}`;
+            const state = JSON.parse(stateData);
+            
+            // Request signatures from all players in the room
+            wss.clients.forEach(client => {
+              const snakeClient = client as SnakeWebSocket;
+              if (snakeClient.roomId === foundRoom?.id && snakeClient.readyState === WebSocket.OPEN) {
+                const stateForSignature = {
+                  type: 'signState',
+                  channelId,
+                  state,
+                  stateId,
+                };
+                
+                snakeClient.send(JSON.stringify(stateForSignature));
+              }
+            });
+          } catch (error) {
+            console.error(`Error processing state update for channel ${channelId}:`, error);
+          }
+          
+          break;
+        }
+        
         case 'finalizeChannel': {
           const { channelId, roomId } = data;
           if (!channelId || !roomId) return;
@@ -602,6 +874,7 @@ wss.on('connection', (ws: WebSocket) => {
           
           // Finalize the channel
           try {
+            // Create a final state with complete game results
             const channelState = {
               roomId,
               stateVersion: room.stateVersion,
@@ -612,7 +885,19 @@ wss.on('connection', (ws: WebSocket) => {
                 isDead: p.isDead || false
               })),
               isGameOver: true,
-              finalizedAt: Date.now()
+              finalizedAt: Date.now(),
+              gameResult: {
+                // Calculate winner based on scores
+                winnerId: Array.from(room.players.values()).reduce((highest, player) => 
+                  !highest || player.score > room.players.get(highest)!.score ? player.id : highest
+                , null as string | null),
+                // Record all scores
+                scores: Object.fromEntries(
+                  Array.from(room.players.entries()).map(([id, player]) => [id, player.score])
+                ),
+                // Add game duration
+                duration: Date.now() - room.createdAt,
+              }
             };
             
             await clearNetRPC.finalizeChannel(channelId, channelState);
@@ -622,7 +907,8 @@ wss.on('connection', (ws: WebSocket) => {
             
             snakeWs.send(JSON.stringify({
               type: 'channelFinalized',
-              channelId
+              channelId,
+              finalState: channelState
             }));
           } catch (error) {
             console.error(`Error finalizing channel ${channelId}:`, error);
@@ -730,3 +1016,71 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`WebSocket server is running on port ${PORT}`);
 });
+
+// Handle graceful shutdown
+async function gracefulShutdown(signal: string) {
+  console.log(`\n${signal} received. Shutting down gracefully...`);
+  
+  // Close all WebSocket connections
+  console.log('Closing WebSocket connections...');
+  wss.clients.forEach(client => {
+    client.close(1000, 'Server shutting down');
+  });
+  
+  // Finalize all active channels
+  console.log('Finalizing channels...');
+  const finalizationPromises: Promise<boolean>[] = [];
+  
+  for (const room of rooms.values()) {
+    // Skip if no channels to finalize
+    if (room.channelIds.size === 0) continue;
+    
+    for (const channelId of room.channelIds) {
+      const finalState = {
+        roomId: room.id,
+        stateVersion: room.stateVersion,
+        players: Array.from(room.players.values()).map(p => ({
+          id: p.id,
+          nickname: p.nickname,
+          score: p.score,
+          isDead: p.isDead || false
+        })),
+        isGameOver: true,
+        finalizedAt: Date.now(),
+        reason: 'server_shutdown'
+      };
+      
+      finalizationPromises.push(clearNetRPC.finalizeChannel(channelId, finalState));
+    }
+  }
+  
+  try {
+    // Wait for all channels to be finalized
+    if (finalizationPromises.length > 0) {
+      console.log(`Finalizing ${finalizationPromises.length} channels...`);
+      await Promise.all(finalizationPromises);
+      console.log('All channels finalized successfully');
+    } else {
+      console.log('No active channels to finalize');
+    }
+  } catch (error) {
+    console.error('Error finalizing channels:', error);
+  }
+  
+  // Close the HTTP server
+  console.log('Closing HTTP server...');
+  server.close(() => {
+    console.log('HTTP server closed');
+    process.exit(0);
+  });
+  
+  // If server doesn't close in 5 seconds, force exit
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 5000);
+}
+
+// Listen for termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

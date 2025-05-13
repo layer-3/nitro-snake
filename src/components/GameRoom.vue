@@ -296,32 +296,57 @@ const copyRoomId = () => {
 const closeChannel = async () => {
   try {
     const activeChannel = clearNetService.getActiveChannel();
-    if (activeChannel) {
-      // Create a final state with game results
-      const finalState = {
-        ...activeChannel.state,
-        gameOver: true,
-        finalScores: gameState.value?.players.map(p => ({ 
-          id: p.id, 
-          nickname: p.nickname, 
-          score: p.score 
-        }))
-      };
+    if (!activeChannel) {
+      console.error('No active channel found');
+      return;
+    }
+
+    // Notify the server to finalize the channel
+    if (props.socket && props.socket.readyState === WebSocket.OPEN) {
+      props.socket.send(JSON.stringify({
+        type: 'finalizeChannel',
+        channelId: activeChannel.channelId,
+        roomId: props.roomId
+      }));
+    }
+    
+    // Create a final state with game results
+    const finalState = {
+      ...activeChannel.state,
+      gameOver: true,
+      finalScores: gameState.value?.players.map(p => ({ 
+        id: p.id, 
+        nickname: p.nickname, 
+        score: p.score 
+      }))
+    };
+    
+    // Close the channel on the client side
+    const success = await clearNetService.closeGameSession(finalState);
+    
+    if (success) {
+      // Get account info to determine available balance
+      const accountInfo = await clearNetService.getAccountInfo();
       
-      // Close the channel
-      const success = await clearNetService.closeGameSession(finalState);
-      
-      if (success) {
-        // Withdraw 80% of funds as an example (in a real app this would be calculated)
-        const accountInfo = await clearNetService.getAccountInfo();
-        if (accountInfo && accountInfo.available > 0n) {
-          const withdrawAmount = accountInfo.available * 80n / 100n;
-          await clearNetService.withdrawFunds(withdrawAmount);
+      if (accountInfo && accountInfo.available > 0n) {
+        // Calculate the proper withdrawal amount based on game outcome
+        let withdrawAmount = accountInfo.available;
+        
+        // If this player won, they should get more funds
+        const currentPlayer = gameState.value?.players.find(p => p.id === props.playerId);
+        if (currentPlayer && isHighestScore(currentPlayer) && !isTie()) {
+          // Winner gets 90% of the total funds
+          withdrawAmount = accountInfo.available * 90n / 100n;
+        } else {
+          // Loser gets their remaining balance
+          withdrawAmount = accountInfo.available;
         }
         
-        // Exit game and return to lobby
-        emit('exit-game');
+        await clearNetService.withdrawFunds(withdrawAmount);
       }
+      
+      // Exit game and return to lobby
+      emit('exit-game');
     }
   } catch (error) {
     console.error('Error closing channel:', error);

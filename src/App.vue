@@ -15,7 +15,13 @@ const channelData = ref(null);
 const gameSessionId = ref('');
 
 const connectWebSocket = () => {
-  const wsUrl = `ws://${window.location.hostname}:3001`;
+  // Use production URL in production, or local development server
+  // This handles both development and production environments
+  const host = window.location.hostname;
+  const port = import.meta.env.PROD ? window.location.port : '3001';
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  
+  const wsUrl = `${protocol}//${host}${port ? ':' + port : ''}`;
   socket.value = new WebSocket(wsUrl);
   
   socket.value.onopen = () => {
@@ -100,8 +106,28 @@ const startGameSession = async (gameRoomId: string, gamePlayerId: string) => {
 
 const updateGameState = async (stateData: string) => {
   try {
+    // Create a monotonically increasing version using timestamp
     const version = BigInt(Math.floor(Date.now() / 1000));
-    await clearNetService.updateGameState(stateData, version);
+    
+    // Update the game state in our local channel
+    const success = await clearNetService.updateGameState(stateData, version);
+    
+    if (!success) {
+      console.error('Failed to update game state in channel');
+      return;
+    }
+    
+    // If we have an active channel, send the state update to other participants
+    const activeChannel = clearNetService.getActiveChannel();
+    if (activeChannel && socket.value && socket.value.readyState === WebSocket.OPEN) {
+      // Notify the server about the new state
+      socket.value.send(JSON.stringify({
+        type: 'channelStateUpdate',
+        channelId: activeChannel.channelId,
+        stateVersion: version.toString(),
+        stateData
+      }));
+    }
   } catch (error) {
     console.error('Error updating game state:', error);
   }

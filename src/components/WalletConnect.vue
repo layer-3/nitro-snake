@@ -8,15 +8,21 @@ const accountAddress = ref('');
 const balance = ref<bigint | null>(null);
 const walletError = ref('');
 
-// Placeholder values - in a real app, these would be fetched from an environment file or configuration
-const CONTRACT_ADDRESSES = {
-  custody: '0x1234567890123456789012345678901234567890',
-  adjudicator: '0x0987654321098765432109876543210987654321',
-  guestAddress: '0x2345678901234567890123456789012345678901',
-  tokenAddress: '0x3456789012345678901234567890123456789012'
+// Contract addresses from server environment
+const getContractAddresses = async () => {
+  try {
+    const response = await fetch('/api/contract-addresses');
+    if (!response.ok) {
+      throw new Error(`Failed to fetch contract addresses: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching contract addresses:', error);
+    throw error;
+  }
 };
 
-const challengeDuration = 100n; // Challenge duration in blocks
+const challengeDuration = 100n; // Challenge duration in blocks - could be configured from server too
 
 // Event emitters
 const emit = defineEmits(['wallet-connected', 'wallet-disconnected', 'error']);
@@ -29,25 +35,66 @@ async function connectWallet() {
   walletError.value = '';
   
   try {
-    // In a real implementation, you would use viem, ethers.js, or Web3Modal to connect to a wallet
-    // For this example, we'll simulate a connection
-    const mockPublicClient = {
-      getChainId: () => Promise.resolve(1),
-      getBalance: () => Promise.resolve(1000000000000000000n) // 1 ETH
+    // Get actual contract addresses from server
+    const contractAddresses = await getContractAddresses();
+    
+    // Connect to a wallet using viem, ethers.js, or Web3Modal
+    // This is a simplified example, you would use your actual wallet connection code
+    const { ethereum } = window as any;
+    
+    if (!ethereum) {
+      throw new Error('MetaMask or compatible wallet not found');
+    }
+    
+    // Request account access
+    const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+    const address = accounts[0];
+    
+    // Get chain ID
+    const chainId = await ethereum.request({ method: 'eth_chainId' });
+    
+    // Create viem compatible clients
+    const publicClient = {
+      getChainId: () => Promise.resolve(parseInt(chainId, 16)),
+      getBalance: async () => {
+        const balance = await ethereum.request({
+          method: 'eth_getBalance',
+          params: [address, 'latest']
+        });
+        return BigInt(balance);
+      }
     };
     
-    const mockWalletClient = {
+    const walletClient = {
       account: {
-        address: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
+        address,
       },
-      signMessage: () => Promise.resolve('0x1234567890'),
-      writeContract: () => Promise.resolve({ hash: '0x1234567890' })
+      signMessage: async (message: string) => {
+        return await ethereum.request({
+          method: 'personal_sign',
+          params: [message, address]
+        });
+      },
+      writeContract: async (params: any) => {
+        // Convert params to format expected by wallet
+        const txParams = {
+          from: address,
+          to: params.address,
+          data: params.data,
+          value: params.value ? params.value.toString(16) : '0x0'
+        };
+        const hash = await ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [txParams]
+        });
+        return { hash };
+      }
     };
     
     const config: NitroConfig = {
-      publicClient: mockPublicClient,
-      walletClient: mockWalletClient,
-      addresses: CONTRACT_ADDRESSES,
+      publicClient,
+      walletClient,
+      addresses: contractAddresses,
       challengeDuration,
     };
     

@@ -50,13 +50,20 @@ async function createChannel() {
   errorMessage.value = '';
 
   try {
-    // Calculate allocation - as room creator, we'll initially allocate most to ourselves
-    // In a real game, this might be split differently
-    const hostAmount = depositAmountWei.value * 9n / 10n; // 90%
-    const guestAmount = depositAmountWei.value - hostAmount; // 10%
+    // Calculate a fair allocation for channel participants
+    // The creator puts up the entire amount, but it will be fairly divided 
+    // when the game ends based on the outcomes
+    const hostAmount = depositAmountWei.value; // Initial deposit amount
+    const guestAmount = 0n; // Guest will add their own deposit when they join
 
-    // Initial game state would be encoded here - for now just using room ID
-    const initialStateData = `game:${props.roomId}:init`;
+    // Create more detailed initial state with game parameters
+    const initialStateData = JSON.stringify({
+      roomId: props.roomId,
+      gameType: 'snake',
+      createdAt: Date.now(),
+      initialFunding: depositAmountWei.value.toString(),
+      status: 'created'
+    });
     
     // Create the channel
     const result = await clearNetService.depositAndCreateChannel(
@@ -99,25 +106,33 @@ async function joinChannel() {
   errorMessage.value = '';
 
   try {
-    // In a real implementation, we would get the channel details from the backend
-    // and then join the channel with our deposit
-    // For this demo, we'll simulate joining
+    // Get channel details from the server for this room
+    const response = await fetch(`/api/rooms/${props.roomId}/channel`);
     
-    // Get any existing channels
-    const channels = await clearNetService.getAccountChannels();
+    if (!response.ok) {
+      throw new Error(`Failed to get channel information: ${response.status}`);
+    }
     
-    // Simulate finding a matching channel for this room
-    // In reality, this would be done through backend coordination
-    const mockChannelData = {
-      channelId: `channel_${props.roomId}`,
-      state: {
-        stateData: `game:${props.roomId}:joined`,
-        version: 1n,
-      }
-    };
+    const channelInfo = await response.json();
     
-    channelData.value = mockChannelData;
-    emit('channel-joined', mockChannelData);
+    // Get the deposit amount specified by the user
+    const depositAmount = depositAmountWei.value;
+    
+    // Join the channel with our deposit
+    // In a real implementation, this would call the join method on the channel
+    // and handle the deposit funds appropriately
+    const joinedChannel = await clearNetService.joinChannel(
+      channelInfo.channelId, 
+      depositAmount, 
+      `game:${props.roomId}:joined`
+    );
+    
+    if (!joinedChannel) {
+      throw new Error('Failed to join channel');
+    }
+    
+    channelData.value = joinedChannel;
+    emit('channel-joined', joinedChannel);
   } catch (error) {
     console.error('Error joining channel:', error);
     errorMessage.value = 'Error joining channel: ' + (error instanceof Error ? error.message : String(error));
