@@ -55,16 +55,13 @@ const handleMessage = (event: MessageEvent) => {
   }
 };
 
-// Handle keyboard input
 const handleKeyDown = (event: KeyboardEvent) => {
   if (!props.socket || !isGameStarted.value) return;
   
-  // Don't process input if the game is over
   if (gameOver.value || gameState.value?.isGameOver) return;
   
-  // Check if current player is dead
   const currentPlayer = gameState.value?.players.find(player => player.id === props.playerId);
-  if (currentPlayer?.isDead) return; // Don't process controls if player is dead
+  if (currentPlayer?.isDead) return;
 
   let direction: string | null = null;
   

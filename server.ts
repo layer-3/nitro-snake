@@ -3,11 +3,10 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
 import axios from 'axios';
 
-// Extend WebSocket type to include our custom properties
 interface SnakeWebSocket extends WebSocket {
   playerId: string;
   roomId: string;
-  channelId?: string; // ClearNet channel ID
+  channelId?: string; 
 }
 
 interface Player {
@@ -27,15 +26,15 @@ interface Room {
   gameInterval: NodeJS.Timeout | null;
   gridSize: { width: number; height: number };
   isGameOver?: boolean;
-  channelIds: Set<string>; // Track channels associated with this room
-  currentState: any; // Current game state for the channel
-  stateVersion: number; // State version counter
+  channelIds: Set<string>;
+  currentState: any;
+  stateVersion: number;
   pendingSignatures: Map<string, { 
     channelId: string;
     state: any; 
     signatures: Map<string, string>;
     timestamp: number;
-  }>[]; // Pending states waiting for signatures, indexed by channelId
+  }[]>; // indexed by channel ID
 }
 
 const rooms = new Map<string, Room>();
@@ -46,7 +45,6 @@ const CLEARNET_API_KEY = process.env.CLEARNET_API_KEY || 'dev-key';
 
 // ClearNet RPC client functions
 const clearNetRPC = {
-  // Submit a state update to the ClearNet RPC
   async submitState(channelId: string, state: any): Promise<boolean> {
     try {
       const response = await axios.post(`${CLEARNET_RPC_URL}/channels/${channelId}/state`, 
@@ -60,7 +58,6 @@ const clearNetRPC = {
     }
   },
 
-  // Register a watchtower with the channel
   async registerWatchtower(channelId: string): Promise<boolean> {
     try {
       const response = await axios.post(`${CLEARNET_RPC_URL}/channels/${channelId}/watchtower`,
@@ -74,7 +71,6 @@ const clearNetRPC = {
     }
   },
 
-  // Finalize a channel
   async finalizeChannel(channelId: string, finalState: any): Promise<boolean> {
     try {
       const response = await axios.post(`${CLEARNET_RPC_URL}/channels/${channelId}/finalize`,
@@ -88,7 +84,6 @@ const clearNetRPC = {
     }
   },
 
-  // Get channel info
   async getChannelInfo(channelId: string): Promise<any> {
     try {
       const response = await axios.get(`${CLEARNET_RPC_URL}/channels/${channelId}`,
@@ -108,12 +103,10 @@ const server = createServer();
 // Create WebSocket server
 const wss = new WebSocketServer({ server });
 
-// Generate room ID
 function generateRoomId(): string {
   return randomBytes(16).toString('hex');
 }
 
-// Generate food position
 function generateFood(gridSize: { width: number; height: number }, players: Map<string, Player>): { x: number; y: number } {
   let x: number, y: number;
   let validPosition = false;
@@ -124,7 +117,6 @@ function generateFood(gridSize: { width: number; height: number }, players: Map<
     
     validPosition = true;
     
-    // Check if food position collides with any player segment
     for (const player of players.values()) {
       for (const segment of player.segments) {
         if (segment.x === x && segment.y === y) {
@@ -139,9 +131,7 @@ function generateFood(gridSize: { width: number; height: number }, players: Map<
   return { x, y };
 }
 
-// Initialize player
 function initializePlayer(id: string, nickname: string, gridSize: { width: number; height: number }): Player {
-  // Place player randomly on the grid
   const x = Math.floor(Math.random() * (gridSize.width - 10)) + 5;
   const y = Math.floor(Math.random() * (gridSize.height - 10)) + 5;
   

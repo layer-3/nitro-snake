@@ -23,9 +23,6 @@ class ClearNetService {
   private currentAddress: string | null = null;
   private activeChannel: ChannelData | null = null;
 
-  /**
-   * Initialize the ClearNet client
-   */
   async initialize(config: NitroConfig): Promise<boolean> {
     try {
       this.client = new NitroliteClient(config);
@@ -38,9 +35,6 @@ class ClearNetService {
     }
   }
 
-  /**
-   * Deposit funds and create a channel
-   */
   async depositAndCreateChannel(amount: bigint, allocationAmounts: [bigint, bigint], stateData: string): Promise<ChannelData | null> {
     if (!this.client || !this.isConnected) {
       console.error("ClearNet client not initialized");
@@ -68,9 +62,6 @@ class ClearNetService {
     }
   }
 
-  /**
-   * Get the current account balance
-   */
   async getAccountInfo() {
     if (!this.client || !this.isConnected) {
       console.error("ClearNet client not initialized");
@@ -85,34 +76,25 @@ class ClearNetService {
     }
   }
 
-  /**
-   * Start a vApp session for the snake game
-   */
   async openGameSession(initialGameState: string) {
     if (!this.client || !this.isConnected || !this.activeChannel) {
       console.error("ClearNet client not initialized or no active channel");
       return null;
     }
 
-    // In a real implementation, this would communicate with the backend
-    // to start a new game session, but for now we'll just return a mock result
+    // Mock implementation for demo purposes
     return {
       sessionId: `session_${Date.now()}`,
       gameState: initialGameState
     };
   }
 
-  /**
-   * Update the game state in the channel
-   */
   async updateGameState(newState: string, version: bigint) {
     if (!this.client || !this.isConnected || !this.activeChannel) {
       console.error("ClearNet client not initialized or no active channel");
       return false;
     }
 
-    // In a real implementation, this would communicate with the backend to update the game state
-    // and get signatures, but for now we just update our local copy
     if (this.activeChannel.state) {
       this.activeChannel.state.stateData = newState;
       this.activeChannel.state.version = version;
@@ -121,9 +103,6 @@ class ClearNetService {
     return true;
   }
   
-  /**
-   * Sign a game state for the channel
-   */
   async signState(stateData: any, stateId: string, channelId: string) {
     if (!this.client || !this.isConnected) {
       console.error("ClearNet client not initialized");
@@ -131,8 +110,7 @@ class ClearNetService {
     }
 
     try {
-      // In a real implementation, this would use NitroliteClient to sign the state
-      // For this example, we'll generate a mock signature
+      // Mock signature for demo purposes
       const mockSignature = `sig_${Date.now()}_${this.currentAddress?.substring(0, 8)}`;
       
       return {
@@ -147,9 +125,6 @@ class ClearNetService {
     }
   }
 
-  /**
-   * Close the vApp session and finalize the channel
-   */
   async closeGameSession(finalState: any) {
     if (!this.client || !this.isConnected || !this.activeChannel) {
       console.error("ClearNet client not initialized or no active channel");
@@ -157,7 +132,6 @@ class ClearNetService {
     }
 
     try {
-      // Close the channel with the final state
       await this.client.closeChannel({
         finalState
       });
@@ -170,9 +144,6 @@ class ClearNetService {
     }
   }
 
-  /**
-   * Withdraw funds from the channel back to the wallet
-   */
   async withdrawFunds(amount: bigint) {
     if (!this.client || !this.isConnected) {
       console.error("ClearNet client not initialized");
@@ -188,9 +159,6 @@ class ClearNetService {
     }
   }
 
-  /**
-   * Get all channels associated with the current account
-   */
   async getAccountChannels() {
     if (!this.client || !this.isConnected) {
       console.error("ClearNet client not initialized");
@@ -205,21 +173,14 @@ class ClearNetService {
     }
   }
 
-  /**
-   * Check if we're connected to ClearNet
-   */
   isClientConnected(): boolean {
     return this.isConnected && this.client !== null;
   }
 
-  /**
-   * Get the currently active channel, if any
-   */
   getActiveChannel(): ChannelData | null {
     return this.activeChannel;
   }
 }
 
-// Export a singleton instance
 export const clearNetService = new ClearNetService();
 export default clearNetService;

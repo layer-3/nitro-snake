@@ -86,13 +86,11 @@ function disconnectWallet() {
   emit('wallet-disconnected');
 }
 
-// Format address for display
 function formatAddress(address: string): string {
   if (!address) return '';
   return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
 }
 
-// Format balance for display
 function formatBalance(balanceWei: bigint | null): string {
   if (balanceWei === null) return '0';
   return (Number(balanceWei) / 1e18).toFixed(4);

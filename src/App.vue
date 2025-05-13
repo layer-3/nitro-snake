@@ -14,9 +14,7 @@ const errorMessage = ref('');
 const channelData = ref(null);
 const gameSessionId = ref('');
 
-// Connect to WebSocket server
 const connectWebSocket = () => {
-  // Use localhost for development, would need proper deployment URL for production
   const wsUrl = `ws://${window.location.hostname}:3001`;
   socket.value = new WebSocket(wsUrl);
   
@@ -100,26 +98,20 @@ const startGameSession = async (gameRoomId: string, gamePlayerId: string) => {
   }
 };
 
-// Update game state in the ClearNet channel
 const updateGameState = async (stateData: string) => {
   try {
-    // In a real implementation, this would be properly versioned
-    // and managed with signatures
-    const version = BigInt(Math.floor(Date.now() / 1000)); // Use timestamp as version for demo
+    const version = BigInt(Math.floor(Date.now() / 1000));
     await clearNetService.updateGameState(stateData, version);
   } catch (error) {
     console.error('Error updating game state:', error);
   }
 };
 
-// Handle state signature requests from the server
 const handleStateSignRequest = async (channelId: string, state: any, stateId: string) => {
   try {
-    // Sign the state using the ClearNet service
     const signatureData = await clearNetService.signState(state, stateId, channelId);
     
     if (signatureData && socket.value && socket.value.readyState === WebSocket.OPEN) {
-      // Send signature back to server
       socket.value.send(JSON.stringify({
         type: 'stateSignature',
         channelId: signatureData.channelId,
