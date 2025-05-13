@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import clearNetService, { NitroConfig } from '../services/ClearNetService';
+import { createAuthRequestMessage, createAuthVerifyMessage } from '@erc7824/nitrolite';
 
 const isConnected = ref(false);
 const isConnecting = ref(false);
@@ -70,16 +71,38 @@ async function connectWallet() {
       }
     };
 
+    // Create a wallet client that will be compatible with nitrolite
     const walletClient = {
       account: {
-        address,
+        address: address,
       },
+      // Provide more robust signMessage function
       signMessage: async (message: any) => {
+        // Handle different message formats
+        let messageToSign;
+        
+        if (typeof message === 'string') {
+          messageToSign = message;
+        } else if (message && message.message) {
+          if (typeof message.message === 'string') {
+            messageToSign = message.message;
+          } else if (message.message.raw) {
+            messageToSign = message.message.raw;
+          } else {
+            messageToSign = JSON.stringify(message.message);
+          }
+        } else {
+          messageToSign = JSON.stringify(message);
+        }
+        
+        console.log("Signing message:", messageToSign);
+        
         return await ethereum.request({
           method: 'personal_sign',
-          params: [message.message.raw || message, address]
+          params: [messageToSign, address]
         });
       },
+      // Add contract interaction support
       writeContract: async (params: any) => {
         // Convert params to format expected by wallet
         const txParams = {
@@ -117,14 +140,23 @@ async function connectWallet() {
       }
     };
 
-    const config: NitroConfig = {
+    // Create the configuration object
+    const config = {
       publicClient,
       walletClient,
       stateWalletClient, // Add the state wallet client
       addresses: contractAddresses,
       challengeDuration,
-      serverAddress: '0xServerAddress123456789012345678901234567890', // The game server's Ethereum address
+      serverAddress: '0x14791697260E4c9A71f18484C9f997B308e59325', // Use the actual server address
     };
+
+    console.log("Initializing ClearNet client with config:", {
+      ...config,
+      walletClient: {
+        ...config.walletClient,
+        account: config.walletClient.account
+      }
+    });
 
     // Initialize the ClearNet client
     const success = await clearNetService.initialize(config);
@@ -133,13 +165,23 @@ async function connectWallet() {
       isConnected.value = true;
       accountAddress.value = walletClient.account.address;
 
-      // Get account info
-      const accountInfo = await clearNetService.getAccountInfo();
-      if (accountInfo) {
-        balance.value = accountInfo.available;
-      }
+      try {
+        // Connect to broker server and authenticate using server's connectToBroker approach
+        // We'll implement a similar function to handle authentication with the broker
+        await connectToBroker();
+        
+        // Get account info
+        const accountInfo = await clearNetService.getAccountInfo();
+        if (accountInfo) {
+          balance.value = accountInfo.available;
+        }
 
-      emit('wallet-connected', { address: accountAddress.value, balance: balance.value });
+        emit('wallet-connected', { address: accountAddress.value, balance: balance.value });
+      } catch (error) {
+        console.error('Error during broker authentication:', error);
+        walletError.value = 'Connected to wallet but broker authentication failed';
+        emit('error', walletError.value);
+      }
     } else {
       walletError.value = 'Failed to initialize ClearNet client';
       emit('error', walletError.value);
@@ -151,6 +193,162 @@ async function connectWallet() {
   } finally {
     isConnecting.value = false;
   }
+}
+
+// Connect to broker and authenticate
+async function connectToBroker(): Promise<void> {
+  console.log('Connecting to broker and authenticating...');
+  
+  try {
+    // Get the WebSocket from ClearNetService
+    const ws = clearNetService.getWebSocketConnection();
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket not connected');
+    }
+    
+    // Create a wallet signer that will work with nitrolite
+    const { ethereum } = window as any;
+    if (!ethereum) {
+      throw new Error('No ethereum provider found');
+    }
+    
+    // Get current wallet address
+    const address = accountAddress.value;
+    if (!address) {
+      throw new Error('No wallet address available');
+    }
+    
+    // Create a wallet signer for authentication
+    const signer = {
+      address,
+      sign: async (message: any): Promise<string> => {
+        // Convert to string if needed
+        const messageStr = typeof message === 'string' ? message : JSON.stringify(message);
+        console.log("Message to sign:", messageStr);
+        
+        // Sign with MetaMask
+        return ethereum.request({
+          method: 'personal_sign',
+          params: [messageStr, address]
+        });
+      }
+    };
+    
+    // Use the authenticate function (based on the React implementation)
+    await authenticate(ws, signer, 15000); // 15 second timeout
+    console.log('Successfully authenticated with broker');
+  } catch (error) {
+    console.error('Error in connectToBroker:', error);
+    throw error;
+  }
+}
+
+/**
+ * Authenticates with the WebSocket server using a challenge-response flow.
+ *
+ * @param ws - The WebSocket connection
+ * @param signer - The signer to use for authentication
+ * @param timeout - Timeout in milliseconds for the entire process
+ * @returns A Promise that resolves when authenticated
+ */
+async function authenticate(ws: WebSocket, signer: any, timeout: number): Promise<void> {
+  if (!ws) throw new Error('WebSocket not connected');
+
+  const authRequest = await createAuthRequestMessage(signer.sign, signer.address);
+
+  console.log('Sending authRequest:', authRequest);
+  ws.send(authRequest);
+
+  return new Promise((resolve, reject) => {
+    if (!ws) return reject(new Error('WebSocket not connected'));
+
+    let authTimeoutId: number | null = null;
+
+    const cleanup = () => {
+      if (authTimeoutId) {
+        clearTimeout(authTimeoutId);
+        authTimeoutId = null;
+      }
+      ws.removeEventListener('message', handleAuthResponse);
+    };
+
+    const resetTimeout = () => {
+      if (authTimeoutId) {
+        clearTimeout(authTimeoutId);
+      }
+      authTimeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error('Authentication timeout'));
+      }, timeout);
+    };
+
+    const handleAuthResponse = async (event: MessageEvent) => {
+      let response;
+
+      try {
+        response = JSON.parse(event.data);
+        console.log('Received auth message:', response);
+      } catch (error) {
+        console.error('Error parsing auth response:', error);
+        console.log('Raw auth message:', event.data);
+        // Don't reject yet, maybe the next message is valid
+        return;
+      }
+
+      try {
+        // Check for challenge response: [<id>, "auth_challenge", [{challenge_message: "..."}], <ts>]
+        if (response.res && response.res[1] === 'auth_challenge') {
+          console.log('Received auth_challenge, preparing auth_verify...');
+          resetTimeout(); // Reset timeout while we process and send verify
+
+          // Create and send verification message
+          const authVerify = await createAuthVerifyMessage(
+            signer.sign,
+            event.data, // Pass the raw challenge response
+            signer.address,
+          );
+
+          console.log('Sending authVerify:', authVerify);
+          ws.send(authVerify);
+          // Keep listening for the final success/error
+        }
+        // Check for success response: [<id>, "auth_verify", ...] 
+        else if (response.res && response.res[1] === 'auth_verify') {
+          console.log('Authentication successful');
+          cleanup();
+          resolve();
+        }
+        // Check for error response
+        else if (response.res && response.res[1] === 'error') {
+          const errorMsg = response.res[2] && response.res[2][0]?.error 
+            ? response.res[2][0].error 
+            : 'Authentication failed';
+
+          console.error('Authentication failed:', errorMsg);
+          cleanup();
+          reject(new Error(String(errorMsg)));
+        } 
+        // Check for alternate error format
+        else if (response.err && response.err[1] === 'error') {
+          const errorMsg = response.err ? response.err[1] : response.error || 'Authentication failed';
+
+          console.error('Authentication failed:', errorMsg);
+          cleanup();
+          reject(new Error(String(errorMsg)));
+        } else {
+          console.warn('Received unexpected auth message structure:', response);
+          // Keep listening if it wasn't a final success/error
+        }
+      } catch (error) {
+        console.error('Error handling auth response:', error);
+        cleanup();
+        reject(new Error(`Authentication error: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    };
+
+    ws.addEventListener('message', handleAuthResponse);
+    resetTimeout(); // Start the initial timeout
+  });
 }
 
 // Disconnect wallet

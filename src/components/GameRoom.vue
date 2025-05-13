@@ -39,12 +39,12 @@ const copySuccess = ref(false);
 const handleMessage = (event: MessageEvent) => {
   try {
     const data = JSON.parse(event.data);
-    
+
     if (data.type === 'gameState') {
       gameState.value = data;
       isGameStarted.value = true;
       waitingForPlayer.value = false;
-      
+
       // Update game over state from server
       if (data.isGameOver) {
         gameOver.value = true;
@@ -57,14 +57,14 @@ const handleMessage = (event: MessageEvent) => {
 
 const handleKeyDown = (event: KeyboardEvent) => {
   if (!props.socket || !isGameStarted.value) return;
-  
+
   if (gameOver.value || gameState.value?.isGameOver) return;
-  
+
   const currentPlayer = gameState.value?.players.find(player => player.id === props.playerId);
   if (currentPlayer?.isDead) return;
 
   let direction: string | null = null;
-  
+
   switch (event.key) {
     case 'ArrowUp':
     case 'w':
@@ -87,7 +87,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       direction = 'right';
       break;
   }
-  
+
   if (direction) {
     props.socket.send(JSON.stringify({
       type: 'changeDirection',
@@ -99,35 +99,35 @@ const handleKeyDown = (event: KeyboardEvent) => {
 // Draw game on canvas
 const drawGame = () => {
   if (!ctx.value || !gameState.value || !canvasRef.value) return;
-  
+
   const { width, height } = gameState.value.gridSize;
   const canvas = canvasRef.value;
-  
+
   // Set canvas size
   canvas.width = width * cellSize.value;
   canvas.height = height * cellSize.value;
-  
+
   // Clear canvas
   ctx.value.clearRect(0, 0, canvas.width, canvas.height);
-  
+
   // Draw grid (optional)
   ctx.value.strokeStyle = '#eee';
   ctx.value.lineWidth = 0.5;
-  
+
   for (let x = 0; x <= width; x++) {
     ctx.value.beginPath();
     ctx.value.moveTo(x * cellSize.value, 0);
     ctx.value.lineTo(x * cellSize.value, height * cellSize.value);
     ctx.value.stroke();
   }
-  
+
   for (let y = 0; y <= height; y++) {
     ctx.value.beginPath();
     ctx.value.moveTo(0, y * cellSize.value);
     ctx.value.lineTo(width * cellSize.value, y * cellSize.value);
     ctx.value.stroke();
   }
-  
+
   // Draw food
   const { food } = gameState.value;
   ctx.value.fillStyle = '#e91e63';
@@ -140,20 +140,20 @@ const drawGame = () => {
     Math.PI * 2
   );
   ctx.value.fill();
-  
+
   // Draw players
   const colors = ['#4CAF50', '#2196F3']; // Green for player 1, blue for player 2
-  
+
   gameState.value.players.forEach((player, index) => {
     const color = colors[index % colors.length];
     const isCurrentPlayer = player.id === props.playerId;
-    
+
     // Only draw if player isn't dead
     if (!player.isDead) {
       // Draw snake segments
       player.segments.forEach((segment, segIndex) => {
         ctx.value!.fillStyle = color;
-        
+
         // Draw head slightly larger and with a border if it's the current player
         if (segIndex === 0) {
           if (isCurrentPlayer) {
@@ -164,7 +164,7 @@ const drawGame = () => {
               cellSize.value,
               cellSize.value
             );
-            
+
             // Draw white eyes
             ctx.value!.fillStyle = 'white';
             ctx.value!.beginPath();
@@ -203,7 +203,7 @@ const drawGame = () => {
         }
       });
     }
-    
+
     // Draw player nickname and score (for all players, even dead ones)
     const status = player.isDead ? " (DEAD)" : "";
     ctx.value!.fillStyle = player.isDead ? "#999" : color;
@@ -226,16 +226,16 @@ onMounted(() => {
   if (props.socket) {
     props.socket.addEventListener('message', handleMessage);
   }
-  
+
   window.addEventListener('keydown', handleKeyDown);
-  
+
   if (canvasRef.value) {
     ctx.value = canvasRef.value.getContext('2d');
-    
+
     // Start animation loop
     animationFrame.value = requestAnimationFrame(animate);
   }
-  
+
   // If we don't receive a game state soon, show waiting message
   setTimeout(() => {
     if (!isGameStarted.value) {
@@ -249,9 +249,9 @@ onUnmounted(() => {
   if (props.socket) {
     props.socket.removeEventListener('message', handleMessage);
   }
-  
+
   window.removeEventListener('keydown', handleKeyDown);
-  
+
   if (animationFrame.value) {
     cancelAnimationFrame(animationFrame.value);
   }
@@ -309,29 +309,29 @@ const closeChannel = async () => {
         roomId: props.roomId
       }));
     }
-    
+
     // Create a final state with game results
     const finalState = {
       ...activeChannel.state,
       gameOver: true,
-      finalScores: gameState.value?.players.map(p => ({ 
-        id: p.id, 
-        nickname: p.nickname, 
-        score: p.score 
+      finalScores: gameState.value?.players.map(p => ({
+        id: p.id,
+        nickname: p.nickname,
+        score: p.score
       }))
     };
-    
+
     // Close the channel on the client side
     const success = await clearNetService.closeGameSession(finalState);
-    
+
     if (success) {
       // Get account info to determine available balance
       const accountInfo = await clearNetService.getAccountInfo();
-      
+
       if (accountInfo && accountInfo.available > 0n) {
         // Calculate the proper withdrawal amount based on game outcome
         let withdrawAmount = accountInfo.available;
-        
+
         // If this player won, they should get more funds
         const currentPlayer = gameState.value?.players.find(p => p.id === props.playerId);
         if (currentPlayer && isHighestScore(currentPlayer) && !isTie()) {
@@ -341,10 +341,10 @@ const closeChannel = async () => {
           // Loser gets their remaining balance
           withdrawAmount = accountInfo.available;
         }
-        
+
         await clearNetService.withdrawFunds(withdrawAmount);
       }
-      
+
       // Exit game and return to lobby
       emit('exit-game');
     }
@@ -357,7 +357,7 @@ const closeChannel = async () => {
 const playAgain = () => {
   // Reset game state
   gameOver.value = false;
-  
+
   // Notify server that we want to play again
   if (props.socket && props.socket.readyState === WebSocket.OPEN) {
     props.socket.send(JSON.stringify({
@@ -373,7 +373,7 @@ const playAgain = () => {
   <div class="game-container">
     <div class="room-info">
       <h2>
-        Room: 
+        Room:
         <span class="room-id" @click="copyRoomId" title="Click to copy">{{ roomId }}</span>
         <button class="copy-btn" @click="copyRoomId" title="Copy room ID">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -385,16 +385,16 @@ const playAgain = () => {
       <p>Share this room ID with your friend to play together!</p>
       <div v-if="copySuccess" class="copy-success">Room ID copied to clipboard!</div>
     </div>
-    
+
     <div class="channel-status">
       <span class="status-label">Channel Status:</span>
       <span class="status-value active">Active</span>
     </div>
-    
+
     <div v-if="waitingForPlayer" class="waiting-message">
       Waiting for another player to join...
     </div>
-    
+
     <div v-if="gameOver" class="game-over">
       <h2>Game Over!</h2>
       <div v-if="gameState">
@@ -407,17 +407,17 @@ const playAgain = () => {
           </span>
         </div>
       </div>
-      
+
       <div class="game-over-actions">
         <button @click="closeChannel" class="close-channel-btn">Close Channel & Withdraw</button>
         <button @click="playAgain" class="play-again-btn">Play Again</button>
       </div>
     </div>
-    
+
     <div class="game-board" :class="{ 'game-started': isGameStarted }">
       <canvas ref="canvasRef"></canvas>
     </div>
-    
+
     <div class="controls-info">
       <h3>Controls</h3>
       <p>Use arrow keys or WASD to control your snake.</p>
