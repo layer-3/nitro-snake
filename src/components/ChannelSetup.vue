@@ -113,7 +113,13 @@ async function joinChannel() {
       throw new Error(`Failed to get channel information: ${response.status}`);
     }
     
-    const channelInfo = await response.json();
+    let channelInfo;
+    try {
+      channelInfo = await response.json();
+    } catch (error) {
+      console.error('Error parsing channel info response:', error);
+      throw new Error('Invalid response from server. Make sure the server is running.');
+    }
     
     // Get the deposit amount specified by the user
     const depositAmount = depositAmountWei.value;

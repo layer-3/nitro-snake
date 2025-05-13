@@ -15,7 +15,12 @@ const getContractAddresses = async () => {
     if (!response.ok) {
       throw new Error(`Failed to fetch contract addresses: ${response.status}`);
     }
-    return await response.json();
+    try {
+      return await response.json();
+    } catch (error) {
+      console.error('Error parsing contract addresses response:', error);
+      throw new Error('Invalid response from server. Make sure the server is running.');
+    }
   } catch (error) {
     console.error('Error fetching contract addresses:', error);
     throw error;
@@ -103,7 +108,7 @@ async function connectWallet() {
     
     if (success) {
       isConnected.value = true;
-      accountAddress.value = mockWalletClient.account.address;
+      accountAddress.value = walletClient.account.address;
       
       // Get account info
       const accountInfo = await clearNetService.getAccountInfo();
