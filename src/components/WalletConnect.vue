@@ -35,29 +35,29 @@ const emit = defineEmits(['wallet-connected', 'wallet-disconnected', 'error']);
 // Connect to wallet
 async function connectWallet() {
   if (isConnecting.value) return;
-  
+
   isConnecting.value = true;
   walletError.value = '';
-  
+
   try {
     // Get actual contract addresses from server
     const contractAddresses = await getContractAddresses();
-    
+
     // Connect to a wallet using viem, ethers.js, or Web3Modal
     // This is a simplified example, you would use your actual wallet connection code
     const { ethereum } = window as any;
-    
+
     if (!ethereum) {
       throw new Error('MetaMask or compatible wallet not found');
     }
-    
+
     // Request account access
     const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
     const address = accounts[0];
-    
+
     // Get chain ID
     const chainId = await ethereum.request({ method: 'eth_chainId' });
-    
+
     // Create viem compatible clients
     const publicClient = {
       getChainId: () => Promise.resolve(parseInt(chainId, 16)),
@@ -69,7 +69,7 @@ async function connectWallet() {
         return BigInt(balance);
       }
     };
-    
+
     const walletClient = {
       account: {
         address,
@@ -95,27 +95,27 @@ async function connectWallet() {
         return { hash };
       }
     };
-    
+
     const config: NitroConfig = {
       publicClient,
       walletClient,
       addresses: contractAddresses,
       challengeDuration,
     };
-    
+
     // Initialize the ClearNet client
     const success = await clearNetService.initialize(config);
-    
+
     if (success) {
       isConnected.value = true;
       accountAddress.value = walletClient.account.address;
-      
+
       // Get account info
       const accountInfo = await clearNetService.getAccountInfo();
       if (accountInfo) {
         balance.value = accountInfo.available;
       }
-      
+
       emit('wallet-connected', { address: accountAddress.value, balance: balance.value });
     } else {
       walletError.value = 'Failed to initialize ClearNet client';
@@ -135,6 +135,7 @@ function disconnectWallet() {
   isConnected.value = false;
   accountAddress.value = '';
   balance.value = null;
+  clearNetService.cleanup(); // Clean up the WebSocket connection
   emit('wallet-disconnected');
 }
 
@@ -161,8 +162,8 @@ onMounted(() => {
 <template>
   <div class="wallet-connect">
     <div v-if="!isConnected" class="connect-container">
-      <button 
-        @click="connectWallet" 
+      <button
+        @click="connectWallet"
         class="connect-btn"
         :disabled="isConnecting"
       >
@@ -170,18 +171,18 @@ onMounted(() => {
       </button>
       <div v-if="walletError" class="error-message">{{ walletError }}</div>
     </div>
-    
+
     <div v-else class="wallet-info">
       <div class="address">
         <span class="address-label">Address:</span>
         <span class="address-value">{{ formatAddress(accountAddress) }}</span>
       </div>
-      
+
       <div class="balance">
         <span class="balance-label">Balance:</span>
         <span class="balance-value">{{ formatBalance(balance) }} ETH</span>
       </div>
-      
+
       <button @click="disconnectWallet" class="disconnect-btn">
         Disconnect
       </button>
