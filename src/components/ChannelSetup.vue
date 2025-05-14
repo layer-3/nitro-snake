@@ -53,31 +53,31 @@ async function checkMetamaskBalance() {
       hasMetamask.value = false;
       return null;
     }
-    
+
     hasMetamask.value = true;
-    
+
     // Request accounts from Metamask
     const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
-    
+
     if (!accounts || accounts.length === 0) {
       console.log('No accounts found');
       metamaskInfo.value = null;
       return null;
     }
-    
+
     // Create a provider - ethers v5 provider
     const provider = new ethers.providers.Web3Provider(ethereum);
-    
+
     // Get network information
     const network = await provider.getNetwork();
     console.log(`Connected to network: ${network.name} (${network.chainId})`);
-    
+
     // Get balance in wei
     const balanceWei = await provider.getBalance(accounts[0]);
-    
+
     // Get signer for transactions
     const signer = provider.getSigner();
-    
+
     const info = {
       address: accounts[0],
       balance: balanceWei,
@@ -85,9 +85,9 @@ async function checkMetamaskBalance() {
       signer,
       chainId: network.chainId
     };
-    
+
     metamaskInfo.value = info;
-    
+
     // Set up listeners for account and network changes
     ethereum.on('accountsChanged', async (newAccounts: string[]) => {
       console.log('Metamask accounts changed:', newAccounts);
@@ -98,7 +98,7 @@ async function checkMetamaskBalance() {
           const newSigner = provider.getSigner();
           const newBalance = await provider.getBalance(newAccounts[0]);
           const network = await provider.getNetwork();
-          
+
           metamaskInfo.value = {
             address: newAccounts[0],
             balance: newBalance,
@@ -112,7 +112,7 @@ async function checkMetamaskBalance() {
         }
       }
     });
-    
+
     ethereum.on('chainChanged', async () => {
       console.log('Metamask network changed, refreshing provider');
       try {
@@ -122,7 +122,7 @@ async function checkMetamaskBalance() {
         const updatedSigner = updatedProvider.getSigner();
         const address = await updatedSigner.getAddress();
         const newBalance = await updatedProvider.getBalance(address);
-        
+
         metamaskInfo.value = {
           address,
           balance: newBalance,
@@ -134,7 +134,7 @@ async function checkMetamaskBalance() {
         console.error('Error updating network info:', err);
       }
     });
-    
+
     return info;
   } catch (error) {
     console.error('Error checking Metamask balance:', error);
@@ -166,34 +166,35 @@ async function createChannel() {
     if (info) {
       // Convert deposit amount to BigNumber for comparison
       const depositAmountBN = ethers.utils.parseEther(depositAmount.value.toString());
-      
+
       // Check if user has enough balance
       if (info.balance.lt(depositAmountBN)) {
         errorMessage.value = `Insufficient balance in Metamask. You have ${ethers.utils.formatEther(info.balance)} ETH`;
         emit('error', errorMessage.value);
         return;
       }
-      
+
       console.log(`Metamask address: ${info.address}`);
       console.log(`Metamask balance: ${ethers.utils.formatEther(info.balance)} ETH`);
     } else {
       console.log('Could not check Metamask balance, proceeding anyway');
     }
-    
+
     // Create more detailed initial state with game parameters
-    const initialStateData = JSON.stringify({
-      roomId: props.roomId,
-      gameType: 'snake',
-      createdAt: Date.now(),
-      initialFunding: depositAmountWei.value.toString(),
-      status: 'created'
-    });
-    
+    // const initialStateData = JSON.stringify({
+    //   roomId: props.roomId,
+    //   gameType: 'snake',
+    //   createdAt: Date.now(),
+    //   initialFunding: depositAmountWei.value.toString(),
+    //   status: 'created'
+    // });
+    const initialStateData = "";
+
     try {
       // Create the channel using the proper Nitrolite client
       const result = await clearNetService.depositAndCreateChannel(
         depositAmountWei.value,
-        initialStateData
+        "0x42",
       );
 
       if (result) {
@@ -206,13 +207,13 @@ async function createChannel() {
     } catch (contractError) {
       console.error('Contract error during channel creation:', contractError);
       let errorMsg = 'Error creating channel';
-      
+
       if (String(contractError).includes('Invalid address')) {
         errorMsg = 'Contract address configuration error. Please check network settings.';
       } else if (String(contractError).includes('user rejected')) {
         errorMsg = 'Transaction was rejected by user.';
       }
-      
+
       errorMessage.value = errorMsg;
       emit('error', errorMessage.value);
     }
@@ -248,14 +249,14 @@ async function joinChannel() {
     if (info) {
       // Convert deposit amount to BigNumber for comparison
       const depositAmountBN = ethers.utils.parseEther(depositAmount.value.toString());
-      
+
       // Check if user has enough balance
       if (info.balance.lt(depositAmountBN)) {
         errorMessage.value = `Insufficient balance in Metamask. You have ${ethers.utils.formatEther(info.balance)} ETH`;
         emit('error', errorMessage.value);
         return;
       }
-      
+
       console.log(`Metamask address: ${info.address}`);
       console.log(`Metamask balance: ${ethers.utils.formatEther(info.balance)} ETH`);
     } else {
@@ -265,11 +266,11 @@ async function joinChannel() {
     try {
       // Get channel details from the server for this room
       const response = await fetch(`/api/rooms/${props.roomId}/channel`);
-  
+
       if (!response.ok) {
         throw new Error(`Failed to get channel information: ${response.status}`);
       }
-  
+
       let channelInfo;
       try {
         channelInfo = await response.json();
@@ -277,10 +278,10 @@ async function joinChannel() {
         console.error('Error parsing channel info response:', error);
         throw new Error('Invalid response from server. Make sure the server is running.');
       }
-  
+
       // Get the deposit amount specified by the user
       const depositAmount = depositAmountWei.value;
-  
+
       // Join the channel with our deposit using the Nitrolite client
       const joinedChannel = await clearNetService.joinChannel(
         channelInfo.channelId,
@@ -296,9 +297,9 @@ async function joinChannel() {
       emit('channel-joined', joinedChannel);
     } catch (error) {
       console.error('Error joining channel:', error);
-      
+
       let errorMsg = 'Error joining channel';
-      
+
       if (String(error).includes('Invalid address')) {
         errorMsg = 'Contract address configuration error. Please check network settings.';
       } else if (String(error).includes('user rejected')) {
@@ -306,7 +307,7 @@ async function joinChannel() {
       } else if (String(error).includes('Failed to get channel information')) {
         errorMsg = `Failed to get channel information. Make sure the room exists and the server is running.`;
       }
-      
+
       errorMessage.value = errorMsg;
       emit('error', errorMessage.value);
     }
@@ -358,7 +359,7 @@ function getNetworkName(chainId: number): string {
     44787: 'Celo Alfajores Testnet',
     1337: 'Local Development'
   };
-  
+
   return networks[chainId] || `Unknown Network (${chainId})`;
 }
 
@@ -367,7 +368,7 @@ onMounted(async () => {
   // Check if Metamask is available
   const { ethereum } = window as any;
   hasMetamask.value = !!ethereum;
-  
+
   if (hasMetamask.value) {
     // Check if already connected - don't prompt for connection yet
     try {
@@ -375,16 +376,16 @@ onMounted(async () => {
       if (accounts && accounts.length > 0) {
         // Create a provider
         const provider = new ethers.providers.Web3Provider(ethereum);
-        
+
         // Get network information
         const network = await provider.getNetwork();
-        
+
         // Get balance
         const balanceWei = await provider.getBalance(accounts[0]);
-        
+
         // Get signer for transactions
         const signer = provider.getSigner();
-        
+
         metamaskInfo.value = {
           address: accounts[0],
           balance: balanceWei,

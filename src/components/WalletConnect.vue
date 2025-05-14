@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue';
 import { ethers } from 'ethers';
 import { createAuthRequestMessage, createAuthVerifyMessage, type NitroliteClientConfig } from '@erc7824/nitrolite';
 import { generateKeyPair } from '../crypto';
+import { createPublicClient, createWalletClient, custom, Hex, http } from 'viem';
 import clearNetService from '../services/ClearNetService';
 import { CONTRACT_ADDRESSES, BROKER_WS_URL } from '../config';
 
@@ -291,138 +292,36 @@ async function connectWallet() {
         }
       };
 
-      // Create a proper walletClient from our signer
-      const walletClient = {
-        account: {
-          address: signer.address
-        },
-        signMessage: async ({ message }: any) => {
-          try {
-            return await signer.sign(message.raw || message);
-          } catch (error) {
-            console.error('Error signing with main wallet:', error);
-            throw error;
-          }
-        },
-        writeContract: async ({ address, abi, functionName, args }: any) => {
-          console.log(`Contract write request to ${address}.${functionName}:`, args);
-          try {
-            // Get ethereum provider
-            const { ethereum } = window as any;
-            if (!ethereum) {
-              throw new Error('No ethereum provider found');
-            }
-            
-            // Create ethers provider and signer
-            const provider = new ethers.providers.Web3Provider(ethereum);
-            const ethSigner = provider.getSigner();
-            
-            // Create contract instance
-            const contract = new ethers.Contract(address, abi, ethSigner);
-            
-            // Execute the function with the provided args
-            const tx = await contract[functionName](...args);
-            
-            // Wait for transaction to be mined
-            const receipt = await tx.wait();
-            console.log(`Transaction confirmed: ${receipt.transactionHash}`);
-            
-            return { hash: receipt.transactionHash };
-          } catch (error) {
-            console.error(`Error in contract write to ${address}.${functionName}:`, error);
-            if (error.code === 4001) {
-              // User rejected transaction
-              throw new Error('Transaction rejected by user');
-            }
-            throw error;
-          }
-        }
-      };
-
-      // Create a basic but functional publicClient
-      // Get network information from the connected wallet
       const networkDetails = await (async () => {
         try {
           const { ethereum } = window as any;
           if (!ethereum) return { id: 80002, name: 'Mumbai' };
-          
+
           const provider = new ethers.providers.Web3Provider(ethereum);
           const network = await provider.getNetwork();
-          return { 
+          return {
             id: network.chainId,
-            name: network.name 
+            name: network.name
           };
         } catch (e) {
           console.error('Error getting network details:', e);
           return { id: 80002, name: 'Mumbai' };
         }
       })();
-      
       console.log(`Using network: ${networkDetails.name} (${networkDetails.id})`);
-      
-      const publicClient: PublicClient = {
-        chain: { id: networkDetails.id }, // Use detected network
-        getChainId: () => networkDetails.id,
-        simulateContract: async ({ address, abi, functionName, args }: any) => {
-          console.log(`Simulating contract call to ${address}.${functionName}`);
-          try {
-            // Get ethereum provider
-            const { ethereum } = window as any;
-            if (!ethereum) {
-              throw new Error('No ethereum provider found');
-            }
-            
-            // Create ethers provider and contract interface
-            const provider = new ethers.providers.Web3Provider(ethereum);
-            const contract = new ethers.Contract(address, abi, provider);
-            
-            // Call the contract function without sending a transaction
-            // This is a dry run that simulates the execution
-            const result = await contract.callStatic[functionName](...args);
-            
-            return {
-              result,
-              request: { address, abi, functionName, args }
-            };
-          } catch (error) {
-            console.error(`Error simulating contract call to ${address}.${functionName}:`, error);
-            // Return failure but let the call proceed
-            return {
-              result: false,
-              request: { address, abi, functionName, args },
-              error
-            };
-          }
-        },
-        readContract: async ({ address, abi, functionName, args }: any) => {
-          console.log(`Reading contract ${address}.${functionName}`);
-          try {
-            // Get ethereum provider
-            const { ethereum } = window as any;
-            if (!ethereum) {
-              throw new Error('No ethereum provider found');
-            }
-            
-            // Create ethers provider and contract interface
-            const provider = new ethers.providers.Web3Provider(ethereum);
-            const contract = new ethers.Contract(address, abi, provider);
-            
-            // Call the contract function
-            const result = await contract[functionName](...(args || []));
-            console.log(`Contract read result:`, result);
-            
-            return result;
-          } catch (error) {
-            console.error(`Error reading from contract ${address}.${functionName}:`, error);
-            
-            // Return sensible default values based on function name if there's an error
-            if (functionName === 'balanceOf') {
-              return BigInt(0);
-            }
-            return true;
-          }
-        }
-      };
+
+      // Create a proper walletClient from our signer
+      const walletClient = createWalletClient({
+                    transport: custom(eip1193Provider),
+                    chain: networkDetails.id,
+                    account: embeddedWallet.address as Hex,
+                });
+
+
+      const publicClient = createPublicClient({
+                    transport: http(),
+                    chain: activeChain,
+                });
 
       // Create contract addresses configuration following the EthTaipei pattern
       const ADDRESSES = {
@@ -430,7 +329,6 @@ async function connectWallet() {
         custody: CONTRACT_ADDRESSES.custody,
         adjudicator: CONTRACT_ADDRESSES.adjudicator,
         guestAddress: CONTRACT_ADDRESSES.guestAddress,
-        // Use the native ETH token address
         tokenAddress: CONTRACT_ADDRESSES.tokenAddress,
       };
 
