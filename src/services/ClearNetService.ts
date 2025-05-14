@@ -262,14 +262,14 @@ class ClearNetService {
       console.log('Authentication already in progress, reusing existing authentication flow');
       return this.authenticationInProgress;
     }
-    
+
     if (!this.wsConnection || this.wsConnection.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected');
     }
 
     // Create a wallet signer that will work with nitrolite
     const signer = this.createWalletSigner();
-    
+
     // Create a new authentication promise and store it
     const authPromise = new Promise<void>((resolve, reject) => {
       let authTimeout: number;
@@ -287,16 +287,16 @@ class ClearNetService {
             console.log('Challenge full response:', message);
             console.log('Challenge res array:', message.res);
             console.log('Challenge data:', message.res[2]);
-            
+
             try {
               // Let's try to extract the challenge directly from the raw response
               const rawData = event.data;
               console.log('Raw challenge response:', rawData);
-              
+
               // Extract the challenge from the response - more safely
               let challenge = null;
               const responseData = message.res[2];
-              
+
               if (Array.isArray(responseData) && responseData.length > 0) {
                 if (typeof responseData[0] === 'object') {
                   // Try both challenge and challenge_message fields
@@ -309,9 +309,9 @@ class ClearNetService {
               } else if (typeof responseData === 'string') {
                 challenge = responseData;
               }
-              
+
               console.log('Extracted challenge:', challenge);
-              
+
               if (!challenge) {
                 throw new Error('No challenge received in auth_challenge response');
               }
@@ -320,15 +320,15 @@ class ClearNetService {
 
               // Use raw challenge data directly for verification
               console.log('Using raw challenge response for verification');
-              
+
               // Pass the raw challenge response to createAuthVerifyMessage
               // This should match what the server is doing
               const authVerify = await createAuthVerifyMessage(
-                signer.sign, 
+                signer.sign,
                 rawData, // Raw challenge response as a string
                 signer.address
               );
-              
+
               console.log('Auth verify created by nitrolite:', authVerify);
               console.log('Sending auth_verify:', authVerify);
               this.wsConnection?.send(authVerify);
@@ -377,7 +377,7 @@ class ClearNetService {
 
       // Use nitrolite's createAuthRequestMessage directly
       console.log('Starting authentication with address:', signer.address);
-      
+
       // Use the same approach as the server
       createAuthRequestMessage(signer.sign, signer.address)
         .then(authRequest => {
@@ -391,7 +391,7 @@ class ClearNetService {
           reject(new Error(`Failed to create auth request: ${error.message}`));
         });
     });
-    
+
     // Store the promise and return it
     this.authenticationInProgress = authPromise;
     return authPromise;
