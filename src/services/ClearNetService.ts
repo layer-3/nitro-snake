@@ -3,8 +3,8 @@ import {
   createAuthRequestMessage,
   createAuthVerifyMessage,
   type NitroliteClientConfig,
-  RequestData,
-  ResponsePayload
+  type RequestData,
+  type ResponsePayload
 } from '@erc7824/nitrolite';
 
 export interface NitroConfig {
@@ -29,6 +29,7 @@ export interface ChannelData {
 
 class ClearNetService {
   private client: NitroliteClient | null = null;
+  private config: any = null; // Store the config for wallet client access
   private isConnected = false;
   private currentAddress: string | null = null;
   private activeChannel: ChannelData | null = null;
@@ -64,6 +65,9 @@ class ClearNetService {
 
       console.log("Initializing with wallet address:", config.walletClient.account.address);
 
+      // Store the config for later use with wallet client
+      this.config = config;
+      
       // Initialize the Nitrolite client
       this.client = new NitroliteClient(config);
       this.currentAddress = config.walletClient.account.address;
@@ -185,22 +189,23 @@ class ClearNetService {
 
   /**
    * Creates a wallet signer that's compatible with nitrolite's authentication functions
+   * Uses the wallet client provided during initialization instead of direct MetaMask access
    *
    * @returns A signer object with address and sign function
    */
   private createWalletSigner() {
-    // Instead of trying to get wallet from NitroliteClient, use the current wallet
-    // from metamask that was stored during initialization
+    // Use the wallet client that was provided during initialization
     if (!this.currentAddress) {
       throw new Error('No wallet address available - connect wallet first');
     }
 
-    // Get the wallet client from window.ethereum
-    const { ethereum } = window as any;
-    if (!ethereum) {
-      throw new Error('No ethereum provider found in window');
+    // Get the walletClient from our stored config
+    if (!this.config?.walletClient) {
+      throw new Error('No wallet client available - initialize with wallet client first');
     }
-
+    
+    const walletClient = this.config.walletClient;
+    
     return {
       address: this.currentAddress as string,
 
@@ -212,37 +217,33 @@ class ClearNetService {
 
           console.log("Message to sign:", messageStr);
 
-          // Don't hash the message - let personal_sign handle it as it expects
-          // This is the standard way Ethereum wallets sign messages
-          const hashHex = messageStr; // Just use the message string directly
-
-          console.log("Message hash to sign:", hashHex);
-
           // Check if we already have a pending signature request for this message
-          if (this.pendingSignatures.has(hashHex)) {
+          if (this.pendingSignatures.has(messageStr)) {
             console.log("Using existing signature request for this message");
-            return this.pendingSignatures.get(hashHex)!;
+            return this.pendingSignatures.get(messageStr)!;
           }
 
           // Create a new signature request promise
           const signaturePromise = (async () => {
             try {
-              // Use metamask directly with personal_sign on the hash
-              const signature = await ethereum.request({
-                method: 'personal_sign',
-                params: [hashHex, this.currentAddress]
+              // Use the wallet client's signMessage function
+              console.log("Signing with wallet client");
+              
+              // Use our stored wallet client for signing
+              const signature = await walletClient.signMessage({
+                message: messageStr
               });
 
-              console.log("Signature (metamask):", signature);
+              console.log("Signature from wallet client:", signature);
               return signature;
             } finally {
               // Remove from pending map when done (whether success or error)
-              this.pendingSignatures.delete(hashHex);
+              this.pendingSignatures.delete(messageStr);
             }
           })();
 
           // Store the promise in our pending map
-          this.pendingSignatures.set(hashHex, signaturePromise);
+          this.pendingSignatures.set(messageStr, signaturePromise);
 
           // Return the promise
           return signaturePromise;

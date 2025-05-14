@@ -1,6 +1,7 @@
-import { Hex } from 'viem';
 import { ethers } from 'ethers';
-import { MessageSigner, RequestData, ResponsePayload } from '@erc7824/nitrolite';
+
+// Define a type for hexadecimal strings that start with 0x
+type Hex = `0x${string}`;
 
 /**
  * Interface for a cryptographic keypair
@@ -15,13 +16,18 @@ export interface CryptoKeypair {
 }
 
 /**
+ * Type for message signing function
+ */
+type MessageSigner = (payload: any) => Promise<Hex>;
+
+/**
  * Interface for a wallet signer that can sign messages
  */
 export interface WalletSigner {
     /** Public key in hexadecimal format */
     publicKey: string;
-    /** Optional Ethereum address derived from the public key */
-    address?: Hex;
+    /** Ethereum address derived from the public key */
+    address: string;
     /** Function to sign a message and return a hex signature */
     sign: MessageSigner;
 }
@@ -64,11 +70,18 @@ export const createEthersSigner = (privateKey: string): WalletSigner => {
 
         return {
             publicKey: wallet.publicKey,
-            address: wallet.address as Hex,
-            sign: async (payload: RequestData | ResponsePayload): Promise<Hex> => {
+            address: wallet.address,
+            sign: async (payload: any): Promise<Hex> => {
                 try {
-                    const messageBytes = ethers.utils.arrayify(ethers.utils.id(JSON.stringify(payload)));
+                    // Convert payload to string if needed
+                    const payloadStr = typeof payload === 'string' 
+                        ? payload 
+                        : JSON.stringify(payload);
+                        
+                    // Hash the payload string
+                    const messageBytes = ethers.utils.arrayify(ethers.utils.id(payloadStr));
 
+                    // Sign the digest using the private key
                     const flatSignature = await wallet._signingKey().signDigest(messageBytes);
 
                     const signature = ethers.utils.joinSignature(flatSignature);
