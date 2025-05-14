@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import clearNetService from '../services/ClearNetService';
+import { ethers } from 'ethers';
 
 const props = defineProps<{
   isWalletConnected: boolean;
   roomId: string;
   roomCreator: boolean;
 }>();
+
+// Metamask state
+const hasMetamask = ref(false);
+const metamaskInfo = ref<{
+  address: string;
+  balance: any;
+  provider: ethers.providers.Web3Provider;
+  signer: ethers.providers.JsonRpcSigner;
+  chainId: number;
+} | null>(null);
 
 const emit = defineEmits(['channel-created', 'channel-joined', 'error']);
 
@@ -32,6 +43,106 @@ const isValidAmount = computed(() => {
   return !isNaN(amount) && amount > 0;
 });
 
+// Initialize Metamask connection and get balance
+async function checkMetamaskBalance() {
+  try {
+    // Check if Metamask is available
+    const { ethereum } = window as any;
+    if (!ethereum) {
+      console.log('Metamask not detected');
+      hasMetamask.value = false;
+      return null;
+    }
+    
+    hasMetamask.value = true;
+    
+    // Request accounts from Metamask
+    const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+    
+    if (!accounts || accounts.length === 0) {
+      console.log('No accounts found');
+      metamaskInfo.value = null;
+      return null;
+    }
+    
+    // Create a provider - ethers v5 provider
+    const provider = new ethers.providers.Web3Provider(ethereum);
+    
+    // Get network information
+    const network = await provider.getNetwork();
+    console.log(`Connected to network: ${network.name} (${network.chainId})`);
+    
+    // Get balance in wei
+    const balanceWei = await provider.getBalance(accounts[0]);
+    
+    // Get signer for transactions
+    const signer = provider.getSigner();
+    
+    const info = {
+      address: accounts[0],
+      balance: balanceWei,
+      provider,
+      signer,
+      chainId: network.chainId
+    };
+    
+    metamaskInfo.value = info;
+    
+    // Set up listeners for account and network changes
+    ethereum.on('accountsChanged', async (newAccounts: string[]) => {
+      console.log('Metamask accounts changed:', newAccounts);
+      if (newAccounts.length === 0) {
+        metamaskInfo.value = null;
+      } else {
+        try {
+          const newSigner = provider.getSigner();
+          const newBalance = await provider.getBalance(newAccounts[0]);
+          const network = await provider.getNetwork();
+          
+          metamaskInfo.value = {
+            address: newAccounts[0],
+            balance: newBalance,
+            provider,
+            signer: newSigner,
+            chainId: network.chainId
+          };
+        } catch (err) {
+          console.error('Error updating account info:', err);
+          metamaskInfo.value = null;
+        }
+      }
+    });
+    
+    ethereum.on('chainChanged', async () => {
+      console.log('Metamask network changed, refreshing provider');
+      try {
+        // Need to refresh provider on chain change
+        const updatedProvider = new ethers.providers.Web3Provider(ethereum);
+        const network = await updatedProvider.getNetwork();
+        const updatedSigner = updatedProvider.getSigner();
+        const address = await updatedSigner.getAddress();
+        const newBalance = await updatedProvider.getBalance(address);
+        
+        metamaskInfo.value = {
+          address,
+          balance: newBalance,
+          provider: updatedProvider,
+          signer: updatedSigner,
+          chainId: network.chainId
+        };
+      } catch (err) {
+        console.error('Error updating network info:', err);
+      }
+    });
+    
+    return info;
+  } catch (error) {
+    console.error('Error checking Metamask balance:', error);
+    metamaskInfo.value = null;
+    return null;
+  }
+}
+
 // Create a new channel
 async function createChannel() {
   if (!props.isWalletConnected) {
@@ -50,12 +161,25 @@ async function createChannel() {
   errorMessage.value = '';
 
   try {
-    // Calculate a fair allocation for channel participants
-    // The creator puts up the entire amount, but it will be fairly divided
-    // when the game ends based on the outcomes
-    const hostAmount = depositAmountWei.value; // Initial deposit amount
-    const guestAmount = 0n; // Guest will add their own deposit when they join
-
+    // Check Metamask balance first
+    const info = await checkMetamaskBalance();
+    if (info) {
+      // Convert deposit amount to BigNumber for comparison
+      const depositAmountBN = ethers.utils.parseEther(depositAmount.value.toString());
+      
+      // Check if user has enough balance
+      if (info.balance.lt(depositAmountBN)) {
+        errorMessage.value = `Insufficient balance in Metamask. You have ${ethers.utils.formatEther(info.balance)} ETH`;
+        emit('error', errorMessage.value);
+        return;
+      }
+      
+      console.log(`Metamask address: ${info.address}`);
+      console.log(`Metamask balance: ${ethers.utils.formatEther(info.balance)} ETH`);
+    } else {
+      console.log('Could not check Metamask balance, proceeding anyway');
+    }
+    
     // Create more detailed initial state with game parameters
     const initialStateData = JSON.stringify({
       roomId: props.roomId,
@@ -64,19 +188,32 @@ async function createChannel() {
       initialFunding: depositAmountWei.value.toString(),
       status: 'created'
     });
+    
+    try {
+      // Create the channel using the proper Nitrolite client
+      const result = await clearNetService.depositAndCreateChannel(
+        depositAmountWei.value,
+        initialStateData
+      );
 
-    // Create the channel
-    const result = await clearNetService.depositAndCreateChannel(
-      depositAmountWei.value,
-      [hostAmount, guestAmount],
-      initialStateData
-    );
-
-    if (result) {
-      channelData.value = result;
-      emit('channel-created', result);
-    } else {
-      errorMessage.value = 'Failed to create channel';
+      if (result) {
+        channelData.value = result;
+        emit('channel-created', result);
+      } else {
+        errorMessage.value = 'Failed to create channel';
+        emit('error', errorMessage.value);
+      }
+    } catch (contractError) {
+      console.error('Contract error during channel creation:', contractError);
+      let errorMsg = 'Error creating channel';
+      
+      if (String(contractError).includes('Invalid address')) {
+        errorMsg = 'Contract address configuration error. Please check network settings.';
+      } else if (String(contractError).includes('user rejected')) {
+        errorMsg = 'Transaction was rejected by user.';
+      }
+      
+      errorMessage.value = errorMsg;
       emit('error', errorMessage.value);
     }
   } catch (error) {
@@ -106,39 +243,73 @@ async function joinChannel() {
   errorMessage.value = '';
 
   try {
-    // Get channel details from the server for this room
-    const response = await fetch(`/api/rooms/${props.roomId}/channel`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to get channel information: ${response.status}`);
+    // Check Metamask balance first
+    const info = await checkMetamaskBalance();
+    if (info) {
+      // Convert deposit amount to BigNumber for comparison
+      const depositAmountBN = ethers.utils.parseEther(depositAmount.value.toString());
+      
+      // Check if user has enough balance
+      if (info.balance.lt(depositAmountBN)) {
+        errorMessage.value = `Insufficient balance in Metamask. You have ${ethers.utils.formatEther(info.balance)} ETH`;
+        emit('error', errorMessage.value);
+        return;
+      }
+      
+      console.log(`Metamask address: ${info.address}`);
+      console.log(`Metamask balance: ${ethers.utils.formatEther(info.balance)} ETH`);
+    } else {
+      console.log('Could not check Metamask balance, proceeding anyway');
     }
 
-    let channelInfo;
     try {
-      channelInfo = await response.json();
+      // Get channel details from the server for this room
+      const response = await fetch(`/api/rooms/${props.roomId}/channel`);
+  
+      if (!response.ok) {
+        throw new Error(`Failed to get channel information: ${response.status}`);
+      }
+  
+      let channelInfo;
+      try {
+        channelInfo = await response.json();
+      } catch (error) {
+        console.error('Error parsing channel info response:', error);
+        throw new Error('Invalid response from server. Make sure the server is running.');
+      }
+  
+      // Get the deposit amount specified by the user
+      const depositAmount = depositAmountWei.value;
+  
+      // Join the channel with our deposit using the Nitrolite client
+      const joinedChannel = await clearNetService.joinChannel(
+        channelInfo.channelId,
+        depositAmount,
+        `game:${props.roomId}:joined`
+      );
+
+      if (!joinedChannel) {
+        throw new Error('Failed to join channel');
+      }
+
+      channelData.value = joinedChannel;
+      emit('channel-joined', joinedChannel);
     } catch (error) {
-      console.error('Error parsing channel info response:', error);
-      throw new Error('Invalid response from server. Make sure the server is running.');
+      console.error('Error joining channel:', error);
+      
+      let errorMsg = 'Error joining channel';
+      
+      if (String(error).includes('Invalid address')) {
+        errorMsg = 'Contract address configuration error. Please check network settings.';
+      } else if (String(error).includes('user rejected')) {
+        errorMsg = 'Transaction was rejected by user.';
+      } else if (String(error).includes('Failed to get channel information')) {
+        errorMsg = `Failed to get channel information. Make sure the room exists and the server is running.`;
+      }
+      
+      errorMessage.value = errorMsg;
+      emit('error', errorMessage.value);
     }
-
-    // Get the deposit amount specified by the user
-    const depositAmount = depositAmountWei.value;
-
-    // Join the channel with our deposit
-    // In a real implementation, this would call the join method on the channel
-    // and handle the deposit funds appropriately
-    const joinedChannel = await clearNetService.joinChannel(
-      channelInfo.channelId,
-      depositAmount,
-      `game:${props.roomId}:joined`
-    );
-
-    if (!joinedChannel) {
-      throw new Error('Failed to join channel');
-    }
-
-    channelData.value = joinedChannel;
-    emit('channel-joined', joinedChannel);
   } catch (error) {
     console.error('Error joining channel:', error);
     errorMessage.value = 'Error joining channel: ' + (error instanceof Error ? error.message : String(error));
@@ -152,11 +323,105 @@ async function joinChannel() {
 function toggleAdvanced() {
   showAdvanced.value = !showAdvanced.value;
 }
+
+// Format Ethereum balance
+function formatEtherBalance(balance: any): string {
+  if (!balance) return '0';
+  try {
+    return ethers.utils.formatEther(balance);
+  } catch (error) {
+    console.error('Error formatting balance:', error);
+    return '0';
+  }
+}
+
+// Format Ethereum address
+function formatAddress(address: string): string {
+  if (!address) return 'Not connected';
+  try {
+    return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
+  } catch (error) {
+    console.error('Error formatting address:', error);
+    return address || 'Invalid address';
+  }
+}
+
+// Get friendly network name from chain ID
+function getNetworkName(chainId: number): string {
+  const networks: Record<number, string> = {
+    1: 'Ethereum Mainnet',
+    5: 'Goerli Testnet',
+    11155111: 'Sepolia Testnet',
+    137: 'Polygon Mainnet',
+    80001: 'Mumbai Testnet',
+    42220: 'Celo Mainnet',
+    44787: 'Celo Alfajores Testnet',
+    1337: 'Local Development'
+  };
+  
+  return networks[chainId] || `Unknown Network (${chainId})`;
+}
+
+// Check for Metamask on component mount
+onMounted(async () => {
+  // Check if Metamask is available
+  const { ethereum } = window as any;
+  hasMetamask.value = !!ethereum;
+  
+  if (hasMetamask.value) {
+    // Check if already connected - don't prompt for connection yet
+    try {
+      const accounts = await ethereum.request({ method: 'eth_accounts' });
+      if (accounts && accounts.length > 0) {
+        // Create a provider
+        const provider = new ethers.providers.Web3Provider(ethereum);
+        
+        // Get network information
+        const network = await provider.getNetwork();
+        
+        // Get balance
+        const balanceWei = await provider.getBalance(accounts[0]);
+        
+        // Get signer for transactions
+        const signer = provider.getSigner();
+        
+        metamaskInfo.value = {
+          address: accounts[0],
+          balance: balanceWei,
+          provider,
+          signer,
+          chainId: network.chainId
+        };
+      }
+    } catch (error) {
+      console.error('Error checking Metamask accounts:', error);
+    }
+  }
+});
 </script>
 
 <template>
   <div class="channel-setup">
     <h3>{{ roomCreator ? 'Create Game Channel' : 'Join Game Channel' }}</h3>
+
+    <div class="metamask-status" v-if="hasMetamask">
+      <div class="metamask-info">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg" alt="Metamask" class="metamask-icon" />
+        <div v-if="metamaskInfo" class="metamask-details">
+          <div class="metamask-balance">Balance: {{ formatEtherBalance(metamaskInfo.balance) }} ETH</div>
+          <div class="metamask-address">{{ formatAddress(metamaskInfo.address) }}</div>
+          <div class="metamask-network" :class="{ 'network-testnet': metamaskInfo.chainId !== 1 }">
+            Network: {{ getNetworkName(metamaskInfo.chainId) }}
+          </div>
+        </div>
+        <div v-else>
+          <div class="metamask-balance">Not connected</div>
+          <button @click="checkMetamaskBalance" class="connect-metamask-btn" :disabled="isCreating || isJoining">
+            Connect Metamask
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div class="form-group">
       <label for="depositAmount">Deposit Amount (ETH):</label>
@@ -367,5 +632,73 @@ small {
 .success {
   color: #4CAF50;
   font-weight: bold;
+}
+
+/* Metamask styles */
+.metamask-status {
+  margin-bottom: 20px;
+  padding: 12px 15px;
+  border-radius: 8px;
+  background-color: #fffbf5;
+  border: 1px solid #f5a623;
+}
+
+.metamask-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.metamask-icon {
+  width: 30px;
+  height: 30px;
+}
+
+.metamask-balance {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.metamask-address {
+  font-family: monospace;
+  color: #666;
+  font-size: 0.9em;
+}
+
+.metamask-network {
+  font-size: 0.85em;
+  color: #1976D2;
+  margin-top: 3px;
+}
+
+.network-testnet {
+  color: #f57c00;
+}
+
+.metamask-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.connect-metamask-btn {
+  background-color: #f5a623;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: background-color 0.2s;
+}
+
+.connect-metamask-btn:hover:not(:disabled) {
+  background-color: #e09216;
+}
+
+.connect-metamask-btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
 }
 </style>

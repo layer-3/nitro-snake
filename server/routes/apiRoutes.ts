@@ -24,7 +24,6 @@ export function setupApiRoutes(app: Express): void {
     res.json({
       custody: CONTRACT_ADDRESSES.custody,
       adjudicator: CONTRACT_ADDRESSES.adjudicator,
-      guestAddress: CONTRACT_ADDRESSES.guestAddress,
       tokenAddress: CONTRACT_ADDRESSES.tokenAddress,
       serverAddress: wallet.address // Return the server's Ethereum address
     });

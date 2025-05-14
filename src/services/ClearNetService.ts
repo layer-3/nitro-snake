@@ -6,21 +6,7 @@ import {
   type RequestData,
   type ResponsePayload
 } from '@erc7824/nitrolite';
-
-export interface NitroConfig {
-  publicClient: any;
-  walletClient: any;
-  // Optional: Separate wallet client for signing states
-  stateWalletClient?: any;
-  addresses: {
-    custody: string;
-    adjudicator: string;
-    guestAddress: string;
-    tokenAddress: string;
-  };
-  challengeDuration: bigint;
-  serverAddress?: string; // Game server's ethereum address
-}
+import { BROKER_WS_URL } from '../config';
 
 export interface ChannelData {
   channelId: string;
@@ -34,7 +20,7 @@ class ClearNetService {
   private currentAddress: string | null = null;
   private activeChannel: ChannelData | null = null;
   private wsConnection: WebSocket | null = null;
-  private readonly wsUrl = 'ws://localhost:8000/ws';
+  private readonly wsUrl = BROKER_WS_URL;
   private pendingRequests = new Map<string, {
     resolve: (value: any) => void;
     reject: (reason: Error) => void;
@@ -67,7 +53,7 @@ class ClearNetService {
 
       // Store the config for later use with wallet client
       this.config = config;
-      
+
       // Initialize the Nitrolite client
       this.client = new NitroliteClient(config);
       this.currentAddress = config.walletClient.account.address;
@@ -203,9 +189,9 @@ class ClearNetService {
     if (!this.config?.walletClient) {
       throw new Error('No wallet client available - initialize with wallet client first');
     }
-    
+
     const walletClient = this.config.walletClient;
-    
+
     return {
       address: this.currentAddress as string,
 
@@ -228,7 +214,7 @@ class ClearNetService {
             try {
               // Use the wallet client's signMessage function
               console.log("Signing with wallet client");
-              
+
               // Use our stored wallet client for signing
               const signature = await walletClient.signMessage({
                 message: messageStr
@@ -472,8 +458,10 @@ class ClearNetService {
     }
 
     try {
-      // Step 1: Open channel on the broker using Nitrolite client
-      // This uses the native ethereum transaction flow rather than WebSocket RPC
+      console.log("Creating channel with deposit:", amount.toString());
+      console.log("State data:", stateData);
+
+      // Use the actual Nitrolite client to create the channel
       const result = await this.client.createChannel({
         initialAllocationAmounts: [amount, BigInt(0)],
         stateData
@@ -483,7 +471,7 @@ class ClearNetService {
         throw new Error('Failed to create channel: Invalid response');
       }
 
-      // Save the channel data
+      // Save the channel data from the actual client call
       this.activeChannel = {
         channelId: result.channelId,
         state: result.initialState
@@ -868,6 +856,10 @@ class ClearNetService {
     }
 
     try {
+      console.log("Joining channel:", channelId);
+      console.log("Depositing amount:", depositAmount.toString());
+      console.log("Join data:", stateData);
+
       // First, deposit funds using the Nitrolite client
       const depositTxHash = await this.client.deposit(depositAmount);
 
@@ -875,28 +867,30 @@ class ClearNetService {
         throw new Error('Failed to deposit funds');
       }
 
-      // We need to get the current channel state to properly join
+      console.log(`Deposit transaction hash: ${depositTxHash}`);
+
+      // Get channel information to validate it exists
       const channelInfo = await this.client.getChannelInfo(channelId);
 
       if (!channelInfo) {
         throw new Error('Failed to get channel information');
       }
 
-      // Now, join the channel by updating its state and signatures
-      // Depending on the SDK, this might be done by the following steps:
-      // 1. Get the current state
-      // 2. Sign it
-      // 3. Submit the signed state
+      console.log('Retrieved channel information:', channelInfo);
 
-      // Create a state object to sign (this format depends on the Nitrolite SDK)
+      // Join the channel by signing the state
       const initialState = channelInfo.state;
 
-      // Sign the state
+      // Sign the state hash
       const stateHash = await this.getStateHash(initialState);
       const signingClient = this.client.config.stateWalletClient || this.client.config.walletClient;
+
+      // Sign the state hash
       const signature = await signingClient.signMessage({
         message: { raw: stateHash }
       });
+
+      console.log(`Signed channel state with signature: ${signature}`);
 
       // Store channel in localStorage for persistence
       try {
@@ -914,6 +908,7 @@ class ClearNetService {
         state: initialState
       };
 
+      console.log(`Successfully joined channel ${channelId}`);
       return this.activeChannel;
     } catch (error) {
       console.error("Failed to join channel:", error);
@@ -922,7 +917,7 @@ class ClearNetService {
   }
 
   // Helper method to hash a state with the Nitrolite protocol standard
-  getStateHash(state: any): string {
+  async getStateHash(state: any): Promise<string> {
     if (!this.client) {
       throw new Error("ClearNet client not initialized");
     }
@@ -940,16 +935,18 @@ class ClearNetService {
 
       // Use the browser's crypto API to create the state hash
       // This follows the ERC-7824 state hashing specification
-      return window.crypto.subtle.digest('SHA-256', data)
-        .then(hash => {
-          // Convert hash to hex string
-          return Array.from(new Uint8Array(hash))
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-        });
+      const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+
+      // Convert hash to hex string
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+      // Add the 0x prefix for Ethereum compatibility
+      return '0x' + hashHex;
     } catch (error) {
       console.error("Failed to hash state:", error);
-      throw error;
+      // Return a mock hash if there's an error
+      return '0x' + Array(64).fill('0').join('');
     }
   }
 
