@@ -51,7 +51,7 @@ async function createChannel() {
 
   try {
     // Calculate a fair allocation for channel participants
-    // The creator puts up the entire amount, but it will be fairly divided 
+    // The creator puts up the entire amount, but it will be fairly divided
     // when the game ends based on the outcomes
     const hostAmount = depositAmountWei.value; // Initial deposit amount
     const guestAmount = 0n; // Guest will add their own deposit when they join
@@ -64,7 +64,7 @@ async function createChannel() {
       initialFunding: depositAmountWei.value.toString(),
       status: 'created'
     });
-    
+
     // Create the channel
     const result = await clearNetService.depositAndCreateChannel(
       depositAmountWei.value,
@@ -95,7 +95,7 @@ async function joinChannel() {
     emit('error', errorMessage.value);
     return;
   }
-  
+
   if (!isValidAmount.value) {
     errorMessage.value = 'Please enter a valid deposit amount';
     emit('error', errorMessage.value);
@@ -108,11 +108,11 @@ async function joinChannel() {
   try {
     // Get channel details from the server for this room
     const response = await fetch(`/api/rooms/${props.roomId}/channel`);
-    
+
     if (!response.ok) {
       throw new Error(`Failed to get channel information: ${response.status}`);
     }
-    
+
     let channelInfo;
     try {
       channelInfo = await response.json();
@@ -120,23 +120,23 @@ async function joinChannel() {
       console.error('Error parsing channel info response:', error);
       throw new Error('Invalid response from server. Make sure the server is running.');
     }
-    
+
     // Get the deposit amount specified by the user
     const depositAmount = depositAmountWei.value;
-    
+
     // Join the channel with our deposit
     // In a real implementation, this would call the join method on the channel
     // and handle the deposit funds appropriately
     const joinedChannel = await clearNetService.joinChannel(
-      channelInfo.channelId, 
-      depositAmount, 
+      channelInfo.channelId,
+      depositAmount,
       `game:${props.roomId}:joined`
     );
-    
+
     if (!joinedChannel) {
       throw new Error('Failed to join channel');
     }
-    
+
     channelData.value = joinedChannel;
     emit('channel-joined', joinedChannel);
   } catch (error) {
@@ -157,24 +157,24 @@ function toggleAdvanced() {
 <template>
   <div class="channel-setup">
     <h3>{{ roomCreator ? 'Create Game Channel' : 'Join Game Channel' }}</h3>
-    
+
     <div class="form-group">
       <label for="depositAmount">Deposit Amount (ETH):</label>
-      <input 
-        id="depositAmount" 
-        v-model="depositAmount" 
-        type="number" 
-        step="0.001"
-        min="0.001"
+      <input
+        id="depositAmount"
+        v-model="depositAmount"
+        type="number"
+        step="0.0001"
+        min="0.00001"
         :disabled="isCreating || isJoining"
       />
       <small>This amount will be used to fund your game channel.</small>
     </div>
-    
+
     <div class="actions">
       <template v-if="roomCreator">
-        <button 
-          @click="createChannel" 
+        <button
+          @click="createChannel"
           class="create-btn"
           :disabled="!isWalletConnected || isCreating || !isValidAmount"
         >
@@ -182,8 +182,8 @@ function toggleAdvanced() {
         </button>
       </template>
       <template v-else>
-        <button 
-          @click="joinChannel" 
+        <button
+          @click="joinChannel"
           class="join-btn"
           :disabled="!isWalletConnected || isJoining || !isValidAmount"
         >
@@ -191,27 +191,27 @@ function toggleAdvanced() {
         </button>
       </template>
     </div>
-    
+
     <div class="advanced-toggle" @click="toggleAdvanced">
       {{ showAdvanced ? 'Hide' : 'Show' }} Advanced Options
     </div>
-    
+
     <div v-if="showAdvanced" class="advanced-options">
       <div class="form-group">
         <label for="roomId">Room ID:</label>
         <input id="roomId" type="text" :value="roomId" disabled />
       </div>
-      
+
       <div class="form-group">
         <label for="role">Your Role:</label>
         <input id="role" type="text" :value="roomCreator ? 'Room Creator' : 'Room Joiner'" disabled />
       </div>
     </div>
-    
+
     <div v-if="errorMessage" class="error-message">
       {{ errorMessage }}
     </div>
-    
+
     <div v-if="channelData" class="channel-info">
       <div class="info-item">
         <span class="label">Channel ID:</span>
