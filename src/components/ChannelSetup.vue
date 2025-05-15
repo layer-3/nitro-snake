@@ -2,6 +2,12 @@
 import { ref, computed, onMounted } from 'vue';
 import clearNetService from '../services/ClearNetService';
 import { ethers } from 'ethers';
+import { CONTRACT_ADDRESSES } from '../config';
+
+// ERC20 ABI for decimals
+const ERC20_ABI = [
+    "function decimals() view returns (uint8)"
+];
 
 const props = defineProps<{
     isWalletConnected: boolean;
@@ -21,20 +27,21 @@ const metamaskInfo = ref<{
 
 const emit = defineEmits(['channel-created', 'channel-joined', 'error']);
 
-const depositAmount = ref<string>('0.01');
+const depositAmount = ref<string>('0.00001');
 const errorMessage = ref('');
 const isCreating = ref(false);
 const isJoining = ref(false);
 const showAdvanced = ref(false);
 const channelData = ref(null);
+const tokenDecimals = ref<number>(18); // Default to 18, will be updated from contract
 
-// Convert ETH to Wei
+// Convert ETH to Wei using contract decimals
 const depositAmountWei = computed(() => {
-    try {
-        return BigInt(Math.floor(parseFloat(depositAmount.value) * 1e18));
-    } catch (e) {
-        return 0n;
-    }
+    const amountFloat = parseFloat(depositAmount.value);
+    if (isNaN(amountFloat)) return 0n;
+
+    const decimalMultiplier = Math.pow(10, tokenDecimals.value);
+    return BigInt(Math.floor(amountFloat * decimalMultiplier));
 });
 
 // Validate that the amount is a valid number
@@ -71,6 +78,17 @@ async function checkMetamaskBalance() {
         // Get network information
         const network = await provider.getNetwork();
         console.log(`Connected to network: ${network.name} (${network.chainId})`);
+
+        // Get token decimals from contract
+        const tokenContract = new ethers.Contract(CONTRACT_ADDRESSES.tokenAddress, ERC20_ABI, provider);
+        try {
+            const decimals = await tokenContract.decimals();
+            tokenDecimals.value = decimals;
+            console.log(`Token decimals: ${decimals}`);
+        } catch (error) {
+            console.error('Failed to get token decimals:', error);
+            // Keep default decimals if contract call fails
+        }
 
         // Get balance in wei
         const balanceWei = await provider.getBalance(accounts[0]);
@@ -427,7 +445,7 @@ onMounted(async () => {
 
         <div class="form-group">
             <label for="depositAmount">Deposit Amount (ETH):</label>
-            <input id="depositAmount" v-model="depositAmount" type="number" step="0.0001" min="0.00001"
+            <input id="depositAmount" v-model="depositAmount" type="number" step="0.00001" min="0.00001"
                 :disabled="isCreating || isJoining" />
             <small>This amount will be used to fund your game channel.</small>
         </div>
