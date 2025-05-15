@@ -130,8 +130,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   console.log('[App] Component unmounting');
-  // Don't disconnect the WebSocket on component unmount
-  // gameService.disconnect();
 });
 </script>
 
@@ -146,12 +144,21 @@ onUnmounted(() => {
         {{ errorMessage }}
       </div>
       <div v-else>
-        <LobbyScreen v-if="currentScreen === 'lobby'" v-model:nickname="nickname" v-model:roomId="roomId"
+        <LobbyScreen
+          v-if="currentScreen === 'lobby'"
+          v-model:nickname="nickname"
+          v-model:roomId="roomId"
+          :socket="gameService.getWebSocket()"
           :errorMessage="gameService.getErrorMessage().value" @create-room="createRoom" @join-room="joinRoom" />
 
-        <GameRoom v-else-if="currentScreen === 'game'" :socket="gameService.getWebSocket()"
-          :roomId="gameService.getRoomId().value" :playerId="gameService.getPlayerId().value" :nickname="nickname"
-          @exit-game="currentScreen = 'lobby'" />
+        <GameRoom
+          v-else-if="currentScreen === 'game'"
+          :roomId="gameService.getRoomId().value"
+          :playerId="gameService.getPlayerId().value"
+          :nickname="nickname"
+          :socket="gameService.getWebSocket()"
+          @exit-game="currentScreen = 'lobby'"
+        />
       </div>
     </main>
   </div>

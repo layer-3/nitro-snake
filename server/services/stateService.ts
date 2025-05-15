@@ -18,11 +18,15 @@ export function getBrokerWebSocket(): WebSocket | null {
 
 // Add a room
 export function addRoom(roomId: string, room: Room): void {
+  console.log(`[stateService] Adding room ${roomId}`);
   rooms.set(roomId, room);
+  console.log(`[stateService] Current rooms:`, Array.from(rooms.keys()));
 }
 
 // Get a room
 export function getRoom(roomId: string): Room | undefined {
+  console.log(`[stateService] Getting room ${roomId}`);
+  console.log(`[stateService] Available rooms:`, Array.from(rooms.keys()));
   return rooms.get(roomId);
 }
 
@@ -38,9 +42,9 @@ export function getAllRooms(): Map<string, Room> {
 
 // Add a pending request
 export function addPendingRequest(
-  requestId: string, 
-  resolve: Function, 
-  reject: Function, 
+  requestId: string,
+  resolve: Function,
+  reject: Function,
   timeout: NodeJS.Timeout
 ): void {
   pendingRequests.set(requestId, { resolve, reject, timeout });

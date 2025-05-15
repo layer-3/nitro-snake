@@ -226,11 +226,13 @@ async function createChannel() {
             let createChannelResponse;
             if (!nitroChannelId) {
                 // Create the channel using the proper Nitrolite client
-                console.log("Start Deposit");
-                const depositResponse = await clearNetService.client.deposit(depositAmountWei.value);
+                const depositAmount = depositAmountWei.value;
+                console.log("Start Deposit", depositAmount);
+                const depositResponse = await clearNetService.client.deposit(depositAmount);
                 console.log("Deposit response:", depositResponse);
+                await clearNetService.client.publicClient.waitForTransactionReceipt({ hash: depositResponse });
                 createChannelResponse = await clearNetService.client.createChannel({
-                    initialAllocationAmounts: [depositAmountWei.value, BigInt(0)],
+                    initialAllocationAmounts: [depositAmount, BigInt(0)],
                     stateData: "0x",
                 });
                 console.log("Create channel response:", createChannelResponse);
@@ -251,6 +253,8 @@ async function createChannel() {
                 errorMsg = 'Contract address configuration error. Please check network settings.';
             } else if (String(contractError).includes('user rejected')) {
                 errorMsg = 'Transaction was rejected by user.';
+            } else {
+                errorMsg = String(contractError);
             }
 
             errorMessage.value = errorMsg;

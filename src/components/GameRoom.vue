@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import clearNetService from '../services/ClearNetService';
+import gameService from '../services/GameService';
 
 const props = defineProps<{
-  socket: WebSocket | null;
   roomId: string;
   playerId: string;
   nickname: string;
@@ -56,7 +56,8 @@ const handleMessage = (event: MessageEvent) => {
 };
 
 const handleKeyDown = (event: KeyboardEvent) => {
-  if (!props.socket || !isGameStarted.value) return;
+  const ws = gameService.getWebSocket();
+  if (!ws || !isGameStarted.value) return;
 
   if (gameOver.value || gameState.value?.isGameOver) return;
 
@@ -89,7 +90,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 
   if (direction) {
-    props.socket.send(JSON.stringify({
+    ws.send(JSON.stringify({
       type: 'changeDirection',
       direction
     }));
@@ -222,24 +223,16 @@ const animate = () => {
 };
 
 // Watch for changes to socket and re-attach event listener
-watch(() => props.socket, (newSocket, oldSocket) => {
-  console.log('[GameRoom] Socket prop changed:', {
-    oldSocketState: oldSocket?.readyState,
-    newSocketState: newSocket?.readyState
-  });
-
-  if (oldSocket) {
-    oldSocket.removeEventListener('message', handleMessage);
-  }
-
-  if (newSocket) {
-    newSocket.addEventListener('message', handleMessage);
+watch(() => gameService.getIsConnected().value, (isConnected) => {
+  const ws = gameService.getWebSocket();
+  if (ws) {
+    ws.addEventListener('message', handleMessage);
   }
 }, { immediate: true });
 
 // Set up game when component is mounted
 onMounted(() => {
-  console.log('[GameRoom] Component mounted, socket state:', props.socket?.readyState);
+  console.log('[GameRoom] Component mounted');
 
   window.addEventListener('keydown', handleKeyDown);
 
@@ -261,10 +254,6 @@ onMounted(() => {
 // Clean up when component is unmounted
 onUnmounted(() => {
   console.log('[GameRoom] Component unmounting');
-
-  if (props.socket) {
-    props.socket.removeEventListener('message', handleMessage);
-  }
 
   window.removeEventListener('keydown', handleKeyDown);
 
@@ -311,8 +300,9 @@ const closeChannel = async () => {
     }
 
     // Notify the server to finalize the channel
-    if (props.socket && props.socket.readyState === WebSocket.OPEN) {
-      props.socket.send(JSON.stringify({
+    const ws = gameService.getWebSocket();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
         type: 'finalizeChannel',
         channelId: activeChannel.channelId,
         roomId: props.roomId
@@ -368,8 +358,9 @@ const playAgain = () => {
   gameOver.value = false;
 
   // Notify server that we want to play again
-  if (props.socket && props.socket.readyState === WebSocket.OPEN) {
-    props.socket.send(JSON.stringify({
+  const ws = gameService.getWebSocket();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
       type: 'playAgain',
       roomId: props.roomId,
       playerId: props.playerId

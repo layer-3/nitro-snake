@@ -92,8 +92,9 @@ async function handleWebSocketMessage(ws: SnakeWebSocket, data: any): Promise<vo
 
 // Handle create room message
 async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
+  console.log('[websocketService] Creating room with data:', data);
   const roomId = generateRoomId();
-  const { nickname, channelId, walletAddress } = data;
+  const { nickname, channelId, walletAddress, allocation } = data;
   const gridSize = { width: 40, height: 30 };
 
   // Create player
@@ -108,6 +109,7 @@ async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
     gridSize,
     channelIds: new Set(),
     playerAddresses: new Map([[player.id, walletAddress]]),
+    playerAllocations: new Map([[player.id, BigInt(allocation)]]),
     currentState: null,
     stateVersion: 0,
     createdAt: Date.now()
@@ -131,13 +133,15 @@ async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
     playerId: player.id
   }));
 
-  console.log(`Room created: ${roomId}, Player: ${player.id}, Address: ${walletAddress}`);
+  console.log(`[websocketService] Room created: ${roomId}, Player: ${player.id}, Address: ${walletAddress}`);
 }
 
 // Handle join room message
 async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
-  const { roomId, nickname, channelId, walletAddress } = data;
+  console.log('[websocketService] Joining room with data:', data);
+  const { roomId, nickname, channelId, walletAddress, allocation } = data;
   const room = getRoom(roomId);
+  console.log('[websocketService] Room lookup result:', room ? 'found' : 'not found');
 
   if (!room) {
     ws.send(JSON.stringify({
@@ -161,6 +165,7 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
   // Add player to room
   room.players.set(player.id, player);
   room.playerAddresses.set(player.id, walletAddress);
+  room.playerAllocations.set(player.id, BigInt(allocation));
 
   ws.roomId = roomId;
 
@@ -188,8 +193,8 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
       // Get player addresses
       const playerAddresses = Array.from(room.playerAddresses.values());
 
-      // Create the app ID
-      const appId = `snake_${roomId}_${Date.now()}`;
+      // Get player allocations
+      const playerAllocations = Array.from(room.playerAllocations.values());
 
       // Get the server's wallet address
       const wallet = new ethers.Wallet(SERVER_PRIVATE_KEY);
@@ -201,12 +206,7 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
       const createdAppId = await createAppSession(
         channelId,
         participants,
-        appId,
-        {
-          gameId: roomId,
-          initialState: "game_started",
-          timestamp: Date.now()
-        }
+        playerAllocations
       );
 
       // Store the app ID in the room
@@ -383,7 +383,7 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
 
 // Handle client disconnect
 async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
-  console.log('Client disconnected');
+  console.log('[websocketService] Client disconnected');
 
   const roomId = ws.roomId;
   const channelId = ws.channelId;
@@ -395,8 +395,8 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
   // Remove player from room
   room.players.delete(ws.playerId);
 
-  // If room is empty, clean up
-  if (room.players.size === 0) {
+  // If room is empty and this wasn't an intentional disconnect, clean up
+  if (room.players.size === 0 && ws.readyState === WebSocket.CLOSED) {
     if (room.gameInterval) {
       clearInterval(room.gameInterval);
     }
@@ -423,14 +423,14 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
 
       try {
         await Promise.all(finalizePromises);
-        console.log(`Finalized all channels for closing room ${roomId}`);
+        console.log(`[websocketService] Finalized all channels for closing room ${roomId}`);
       } catch (error) {
-        console.error(`Error finalizing channels for room ${roomId}:`, error);
+        console.error(`[websocketService] Error finalizing channels for room ${roomId}:`, error);
       }
     }
 
     removeRoom(roomId);
-    console.log(`Room deleted: ${roomId}`);
+    console.log(`[websocketService] Room deleted: ${roomId}`);
   } else {
     // If this client had a channel associated, mark the game as over
     if (channelId && room.channelIds.has(channelId)) {
@@ -454,9 +454,9 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
 
         await clearNetRPC.finalizeChannel(channelId, finalState);
         room.channelIds.delete(channelId);
-        console.log(`Finalized channel ${channelId} due to player disconnect`);
+        console.log(`[websocketService] Finalized channel ${channelId} due to player disconnect`);
       } catch (error) {
-        console.error(`Error finalizing channel ${channelId}:`, error);
+        console.error(`[websocketService] Error finalizing channel ${channelId}:`, error);
       }
     }
 

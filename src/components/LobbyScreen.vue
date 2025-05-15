@@ -47,7 +47,7 @@ const updateRoomId = (e: Event) => {
 const createRoom = () => {
   if (isChannelCreated.value) {
     isCreatingRoom.value = true;
-    gameService.createRoom(props.nickname, channelInfo.value.channelId, walletAddress.value);
+    gameService.createRoom(props.nickname, channelInfo.value.channelId, walletAddress.value, channelInfo.value.initialState.allocations[0].amount);
     emit('create-room');
   } else {
     console.log("createRoom", isChannelCreated.value);
@@ -58,7 +58,7 @@ const createRoom = () => {
 const joinRoom = () => {
   if (isChannelCreated.value) {
     isJoiningRoom.value = true;
-    gameService.joinRoom(props.roomId, props.nickname, channelInfo.value.channelId, walletAddress.value);
+    gameService.joinRoom(props.roomId, props.nickname, channelInfo.value.channelId, walletAddress.value, channelInfo.value.initialState.allocations[0].amount);
     emit('join-room');
   } else {
     emit('update:errorMessage', 'Please join a channel first');
@@ -105,11 +105,6 @@ function generateRoomId(): string {
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 }
-
-// Clean up on component unmount
-onUnmounted(() => {
-  gameService.disconnect();
-});
 </script>
 
 <template>

@@ -6,9 +6,12 @@ import {
   RequestData,
   ResponsePayload,
   MessageSigner,
+  AppDefinition,
+  CreateAppSessionRequest
 } from '@erc7824/nitrolite';
 import {
   BROKER_WS_URL,
+  CONTRACT_ADDRESSES,
   SERVER_PRIVATE_KEY
 } from '../config';
 import {
@@ -19,6 +22,7 @@ import {
   clearPendingRequest
 } from './stateService';
 import { RPCRequest, RPCResponse, ChallengeData } from '../interfaces';
+import { Hex } from 'viem';
 
 // Flag to indicate if we've authenticated with the broker
 let isAuthenticated = false;
@@ -323,8 +327,7 @@ export async function sendToBroker(request: any): Promise<any> {
 export async function createAppSession(
   channelId: string,
   participants: string[],
-  appId: string,
-  initialState: any
+  allocations: bigint[]
 ): Promise<string> {
   // Ensure we're authenticated before creating an app session
   if (!isAuthenticated) {
@@ -339,32 +342,34 @@ export async function createAppSession(
   // Prepare the request object
   const requestId = Date.now();
   const method = "create_app_session";
+  const intents = [Number(allocations[0]), Number(allocations[1]), 0];
   const reqParams = [{
-    channel_id: channelId,
-    participants: participants,
-    weights: [0, 0, 100], // Alice: 0, Bob: 0, Server: 100
-    quorum: 100, // Server has full decision power
-    initial_state: JSON.stringify(initialState),
-    app_id: appId
+    definition: {
+      protocol: "nitroliterpc",
+      participants: participants.map(p => p as Hex),
+      weights: [0, 0, 100], // Alice: 0, Bob: 0, Server: 100
+      quorum: 100,
+      challenge: 0,
+      nonce: Date.now(),
+    },
+    token: CONTRACT_ADDRESSES.tokenAddress as Hex,
+    allocations: intents
   }];
   const timestamp = Math.floor(Date.now() / 1000);
+  console.log({ requestId, method, reqParams: reqParams[0], timestamp });
 
   // Create request data - we'll sign it in sendToBroker
   const request = {
     req: [requestId, method, reqParams, timestamp],
-    sig: [""] // Will be filled in by sendToBroker
+    sig: [""], // Will be filled in by sendToBroker
+    int: intents
   };
 
   try {
     const result = await sendToBroker(request);
+    const appId = result.app_id || (typeof result[0] === 'object' ? result[0].app_id : null);
     console.log(`Created app session ${appId} for channel ${channelId}`);
-
-    // Check if result has the app_id
-    if (result && typeof result === 'object') {
-      return result.app_id || (typeof result[0] === 'object' ? result[0].app_id : null);
-    }
-
-    return appId; // Fallback to the original appId
+    return appId;
   } catch (error) {
     console.error(`Error creating app session for channel ${channelId}:`, error);
     throw error;
