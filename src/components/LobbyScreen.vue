@@ -50,6 +50,7 @@ const createRoom = () => {
     gameService.createRoom(props.nickname, channelInfo.value.channelId, walletAddress.value);
     emit('create-room');
   } else {
+    console.log("createRoom", isChannelCreated.value);
     emit('update:errorMessage', 'Please create a channel first');
   }
 };

@@ -221,11 +221,25 @@ const animate = () => {
   animationFrame.value = requestAnimationFrame(animate);
 };
 
+// Watch for changes to socket and re-attach event listener
+watch(() => props.socket, (newSocket, oldSocket) => {
+  console.log('[GameRoom] Socket prop changed:', {
+    oldSocketState: oldSocket?.readyState,
+    newSocketState: newSocket?.readyState
+  });
+
+  if (oldSocket) {
+    oldSocket.removeEventListener('message', handleMessage);
+  }
+
+  if (newSocket) {
+    newSocket.addEventListener('message', handleMessage);
+  }
+}, { immediate: true });
+
 // Set up game when component is mounted
 onMounted(() => {
-  if (props.socket) {
-    props.socket.addEventListener('message', handleMessage);
-  }
+  console.log('[GameRoom] Component mounted, socket state:', props.socket?.readyState);
 
   window.addEventListener('keydown', handleKeyDown);
 
@@ -246,6 +260,8 @@ onMounted(() => {
 
 // Clean up when component is unmounted
 onUnmounted(() => {
+  console.log('[GameRoom] Component unmounting');
+
   if (props.socket) {
     props.socket.removeEventListener('message', handleMessage);
   }
@@ -254,13 +270,6 @@ onUnmounted(() => {
 
   if (animationFrame.value) {
     cancelAnimationFrame(animationFrame.value);
-  }
-});
-
-// Watch for changes to socket and re-attach event listener
-watch(() => props.socket, (newSocket) => {
-  if (newSocket) {
-    newSocket.addEventListener('message', handleMessage);
   }
 });
 

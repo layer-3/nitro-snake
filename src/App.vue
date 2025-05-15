@@ -11,32 +11,41 @@ const currentScreen = ref('lobby'); // 'lobby' or 'game'
 const errorMessage = ref('');
 const channelData = ref(null);
 const gameSessionId = ref('');
-const isConnecting = ref(true);
 
 // Create a new game room
-const createRoom = () => {
+const createRoom = async () => {
   if (!nickname.value.trim()) {
     errorMessage.value = 'Please enter a nickname';
     return;
   }
 
   // Check if we have an active channel
-  const activeChannel = clearNetService.getActiveChannel();
+  let activeChannel = clearNetService.getActiveChannel();
   if (!activeChannel) {
-    errorMessage.value = 'Please create a channel first';
-    return;
+    // Try to restore channel from storage first
+    clearNetService.restoreChannelFromStorage();
+    activeChannel = clearNetService.getActiveChannel();
+    if (!activeChannel) {
+      errorMessage.value = 'Please create a channel first';
+      return;
+    }
   }
 
-  const walletAddress = clearNetService.client.walletClient.account.address;
-  gameService.createRoom(
-    nickname.value.trim(),
-    activeChannel.channelId,
-    walletAddress
-  );
+  try {
+    const walletAddress = clearNetService.client.walletClient.account.address;
+    await gameService.createRoom(
+      nickname.value.trim(),
+      activeChannel.channelId,
+      walletAddress
+    );
+  } catch (error) {
+    console.error('Error creating room:', error);
+    // Error message is already set in GameService
+  }
 };
 
 // Join an existing game room
-const joinRoom = () => {
+const joinRoom = async () => {
   if (!nickname.value.trim()) {
     errorMessage.value = 'Please enter a nickname';
     return;
@@ -54,46 +63,75 @@ const joinRoom = () => {
     return;
   }
 
-  const walletAddress = clearNetService.client.walletClient.account.address;
-  gameService.joinRoom(
-    roomId.value.trim(),
-    nickname.value.trim(),
-    activeChannel.channelId,
-    walletAddress
-  );
+  try {
+    const walletAddress = clearNetService.client.walletClient.account.address;
+    await gameService.joinRoom(
+      roomId.value.trim(),
+      nickname.value.trim(),
+      activeChannel.channelId,
+      walletAddress
+    );
+  } catch (error) {
+    console.error('Error joining room:', error);
+    // Error message is already set in GameService
+  }
 };
 
-// Watch for game over
-watch(() => currentScreen.value, (newScreen, oldScreen) => {
-  if (oldScreen === 'game' && newScreen === 'lobby') {
-    // Game ended, handle channel closing
-    gameService.finalizeGame();
+// Watch for room events from GameService
+watch(gameService.getRoomId(), (newRoomId) => {
+  console.log('[App] Room ID changed:', { newRoomId, currentScreen: currentScreen.value });
+  if (newRoomId) {
+    // Switch to game screen when room is created or joined
+    currentScreen.value = 'game';
+    // Clear any error messages when successfully entering game
+    errorMessage.value = '';
   }
 });
 
 // Watch for connection state changes
 watch(gameService.getIsConnected(), (isConnected) => {
-  isConnecting.value = false;
-  if (!isConnected) {
-    errorMessage.value = 'Lost connection to server. Please refresh the page.';
+  console.log('[App] Connection state changed:', { isConnected, currentScreen: currentScreen.value });
+  if (!isConnected && currentScreen.value === 'game') {
+  // Only show error if we're in the game screen
+    errorMessage.value = 'Connection lost. Please refresh the page.';
+  } else if (isConnected) {
+    errorMessage.value = '';
+  }
+});
+
+// Watch for screen changes
+watch(() => currentScreen.value, (newScreen, oldScreen) => {
+  console.log('[App] Screen changed:', { oldScreen, newScreen });
+  if (oldScreen === 'game' && newScreen === 'lobby') {
+    // Game ended, handle channel closing
+    console.log('[App] Game ended, finalizing game');
+    gameService.finalizeGame();
+  }
+});
+
+// Watch for channel state changes
+watch(() => clearNetService.getActiveChannel(), (newChannel) => {
+  if (!newChannel) {
+    // If channel is lost, show error
+    errorMessage.value = 'Channel connection lost. Please create a new channel.';
+  } else {
+    // Clear any channel-related errors
+    if (errorMessage.value.includes('channel')) {
+      errorMessage.value = '';
+    }
   }
 });
 
 onMounted(() => {
-  // Initialize WebSocket connection
+  console.log('[App] Component mounted');
+  // Initialize WebSocket connection - this will be handled by GameService
   gameService.connect();
-
-  // Set a timeout to handle connection failure
-  setTimeout(() => {
-    if (!gameService.getIsConnected().value) {
-      isConnecting.value = false;
-      errorMessage.value = 'Failed to connect to server. Please refresh the page.';
-    }
-  }, 5000);
 });
 
 onUnmounted(() => {
-  gameService.disconnect();
+  console.log('[App] Component unmounting');
+  // Don't disconnect the WebSocket on component unmount
+  // gameService.disconnect();
 });
 </script>
 
@@ -104,11 +142,8 @@ onUnmounted(() => {
     </header>
 
     <main>
-      <div v-if="isConnecting" class="connection-status">
-        Connecting to server...
-      </div>
-      <div v-else-if="!gameService.getIsConnected().value" class="connection-error">
-        {{ errorMessage || 'Connection lost. Please refresh the page.' }}
+      <div v-if="!gameService.getIsConnected().value && currentScreen === 'lobby'" class="connection-error">
+        {{ errorMessage }}
       </div>
       <div v-else>
         <LobbyScreen v-if="currentScreen === 'lobby'" v-model:nickname="nickname" v-model:roomId="roomId"
@@ -140,15 +175,11 @@ h1 {
   font-size: 2.5rem;
 }
 
-.connection-status,
 .connection-error {
   text-align: center;
   padding: 20px;
   background-color: #f8f8f8;
   border-radius: 8px;
   color: #666;
-}
-.connection-error {
-  color: #f44336;
 }
 </style>

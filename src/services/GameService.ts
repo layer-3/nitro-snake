@@ -27,23 +27,33 @@ class GameService {
   private errorMessage: Ref<string> = ref('');
   private gameState: Ref<GameState | null> = ref(null);
   private messageHandlers: Map<string, (data: any) => void> = new Map();
+  private connectionPromise: Promise<void> | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 3;
+  private isConnecting = false;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
     this.setupMessageHandlers();
+    // Initialize connection on service creation
+    this.connect();
   }
 
   private setupMessageHandlers() {
     this.messageHandlers.set('roomCreated', (data) => {
+      console.log('[GameService] Room created:', data);
       this.roomId.value = data.roomId;
       this.playerId.value = data.playerId;
     });
 
     this.messageHandlers.set('roomJoined', (data) => {
+      console.log('[GameService] Room joined:', data);
       this.roomId.value = data.roomId;
       this.playerId.value = data.playerId;
     });
 
     this.messageHandlers.set('error', (data) => {
+      console.log('[GameService] Error received:', data);
       this.errorMessage.value = data.message;
     });
 
@@ -56,79 +66,196 @@ class GameService {
     });
 
     this.messageHandlers.set('channelFinalized', (data) => {
-      console.log(`Channel ${data.channelId} has been finalized`);
+      console.log(`[GameService] Channel ${data.channelId} has been finalized`);
     });
   }
 
   connect() {
+    console.log('[GameService] connect() called, current state:', {
+      wsState: this.ws?.readyState,
+      isConnecting: this.isConnecting,
+      hasConnectionPromise: !!this.connectionPromise,
+      reconnectAttempts: this.reconnectAttempts,
+      roomId: this.roomId.value
+    });
+
     if (this.ws?.readyState === WebSocket.OPEN) {
-      return;
+      console.log('[GameService] WebSocket already connected, returning');
+      return Promise.resolve();
     }
 
-    this.ws = new WebSocket(GAMESERVER_WS_URL);
+    if (this.connectionPromise) {
+      console.log('[GameService] Connection attempt already in progress, returning existing promise');
+      return this.connectionPromise;
+    }
 
-    this.ws.onopen = () => {
-      this.isConnected.value = true;
-      console.log('WebSocket connected');
-    };
+    if (this.isConnecting) {
+      console.log('[GameService] Already connecting, returning');
+      return Promise.resolve();
+    }
 
-    this.ws.onclose = () => {
-      this.isConnected.value = false;
-      console.log('WebSocket disconnected');
-    };
-
-    this.ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      this.errorMessage.value = 'Connection error. Please try again.';
-    };
-
-    this.ws.onmessage = (event) => {
+    this.isConnecting = true;
+    this.connectionPromise = new Promise((resolve, reject) => {
       try {
-        const data = JSON.parse(event.data);
-        const handler = this.messageHandlers.get(data.type);
-        if (handler) {
-          handler(data);
-        }
+        console.log('[GameService] Creating new WebSocket connection');
+        this.ws = new WebSocket(GAMESERVER_WS_URL);
+
+        this.ws.onopen = () => {
+          this.isConnected.value = true;
+          this.reconnectAttempts = 0;
+          this.isConnecting = false;
+          console.log('[GameService] WebSocket connected successfully');
+          resolve();
+        };
+
+        this.ws.onclose = (event) => {
+          console.log('[GameService] WebSocket closed:', {
+            wasClean: event.wasClean,
+            code: event.code,
+            reason: event.reason,
+            currentState: {
+              isConnecting: this.isConnecting,
+              reconnectAttempts: this.reconnectAttempts,
+              hasConnectionPromise: !!this.connectionPromise,
+              roomId: this.roomId.value
+            }
+          });
+
+          this.isConnecting = false;
+          if (!event.wasClean) {
+            this.handleDisconnection();
+          } else {
+            this.isConnected.value = false;
+            this.connectionPromise = null;
+            // Only schedule reconnect if this wasn't an intentional disconnect
+            // and we don't have an active room
+            if (event.reason !== 'Client disconnected' && !this.roomId.value) {
+              this.scheduleReconnect();
+            }
+          }
+        };
+
+        this.ws.onerror = (error) => {
+          this.isConnecting = false;
+          console.error('WebSocket error:', error);
+        };
+
+        this.ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            const handler = this.messageHandlers.get(data.type);
+            if (handler) {
+              handler(data);
+            }
+          } catch (error) {
+            console.error('Error parsing message:', error);
+          }
+        };
       } catch (error) {
-        console.error('Error parsing message:', error);
+        this.isConnecting = false;
+        this.connectionPromise = null;
+        reject(error);
       }
-    };
+    });
+
+    return this.connectionPromise;
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+    }
+
+    this.reconnectTimeout = setTimeout(() => {
+      if (!this.isConnected.value && !this.isConnecting) {
+        console.log('Attempting to reconnect...');
+        this.connect();
+      }
+    }, 1000);
+  }
+
+  private handleDisconnection() {
+    this.isConnected.value = false;
+    this.connectionPromise = null;
+    this.isConnecting = false;
+
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+      this.scheduleReconnect();
+    } else {
+      this.errorMessage.value = 'Connection lost. Please refresh the page.';
+    }
   }
 
   disconnect() {
+    console.log('[GameService] disconnect() called, current state:', {
+      wsState: this.ws?.readyState,
+      isConnecting: this.isConnecting,
+      hasConnectionPromise: !!this.connectionPromise
+    });
+
     if (this.ws) {
-      this.ws.close();
+      this.ws.close(1000, 'Client disconnected');
       this.ws = null;
+      this.connectionPromise = null;
+      this.reconnectAttempts = 0;
+      this.isConnecting = false;
+      if (this.reconnectTimeout) {
+        clearTimeout(this.reconnectTimeout);
+        this.reconnectTimeout = null;
+      }
+      console.log('[GameService] WebSocket disconnected and cleaned up');
     }
   }
 
-  createRoom(nickname: string, channelId: string, walletAddress: string) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.errorMessage.value = 'Not connected to server';
-      return;
+  private async ensureConnected() {
+    if (!this.isConnected.value) {
+      await this.connect();
     }
-
-    this.ws.send(JSON.stringify({
-      type: 'createRoom',
-      nickname,
-      channelId,
-      walletAddress
-    }));
   }
 
-  joinRoom(roomId: string, nickname: string, channelId: string, walletAddress: string) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.errorMessage.value = 'Not connected to server';
-      return;
-    }
+  async createRoom(nickname: string, channelId: string, walletAddress: string) {
+    try {
+      await this.ensureConnected();
 
-    this.ws.send(JSON.stringify({
-      type: 'joinRoom',
-      roomId,
-      nickname,
-      channelId,
-      walletAddress
-    }));
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        throw new Error('Not connected to server');
+      }
+
+      this.ws.send(JSON.stringify({
+        type: 'createRoom',
+        nickname,
+        channelId,
+        walletAddress
+      }));
+    } catch (error) {
+      console.error('Error creating room:', error);
+      this.errorMessage.value = 'Failed to create room. Please try again.';
+      throw error;
+    }
+  }
+
+  async joinRoom(roomId: string, nickname: string, channelId: string, walletAddress: string) {
+    try {
+      await this.ensureConnected();
+
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        throw new Error('Not connected to server');
+      }
+
+      this.ws.send(JSON.stringify({
+        type: 'joinRoom',
+        roomId,
+        nickname,
+        channelId,
+        walletAddress
+      }));
+    } catch (error) {
+      console.error('Error joining room:', error);
+      this.errorMessage.value = 'Failed to join room. Please try again.';
+      throw error;
+    }
   }
 
   changeDirection(direction: 'up' | 'down' | 'left' | 'right') {

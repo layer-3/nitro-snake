@@ -1,6 +1,6 @@
 // Export configuration values
 export const BROKER_WS_URL = "wss://ethtaipei-production.up.railway.app/ws";
-export const GAMESERVER_WS_URL = "ws://localhost:3001/ws";
+export const GAMESERVER_WS_URL = "ws://localhost:3001";
 
 // Helper function to safely access environment variables
 const getEnvVar = (key: string, defaultValue: string): string => {

@@ -39,6 +39,45 @@ class ClearNetService {
     private reconnectDelay = 1000;
     private reconnectTimeout: NodeJS.Timeout | null = null;
 
+    constructor() {
+        // Try to restore channel from localStorage on initialization
+        this.restoreChannelFromStorage();
+    }
+
+    public restoreChannelFromStorage(): void {
+        try {
+            const channelId = localStorage.getItem("nitro_channel_id");
+            const channelState = localStorage.getItem("nitro_channel_state");
+
+            if (channelId && channelState) {
+                this.activeChannel = {
+                    channelId,
+                    state: JSON.parse(channelState, (key, value) => {
+                        // Handle bigint values stored as strings
+                        if (typeof value === 'string' && value.endsWith('n')) {
+                            return BigInt(value.slice(0, -1));
+                        }
+                        return value;
+                    })
+                };
+                console.log("Restored channel from storage:", this.activeChannel);
+            }
+        } catch (error) {
+            console.error("Failed to restore channel from storage:", error);
+            // Clear potentially corrupted storage
+            this.clearChannelStorage();
+        }
+    }
+
+    private clearChannelStorage() {
+        try {
+            localStorage.removeItem("nitro_channel_id");
+            localStorage.removeItem("nitro_channel_state");
+        } catch (error) {
+            console.error("Failed to clear channel storage:", error);
+        }
+    }
+
     async initialize(config: NitroliteClientConfig): Promise<boolean> {
         try {
             // Validate the config
@@ -892,6 +931,10 @@ class ClearNetService {
     }
 
     getActiveChannel(): ChannelData | null {
+        // If we don't have an active channel but have one in storage, try to restore it
+        if (!this.activeChannel) {
+            this.restoreChannelFromStorage();
+        }
         return this.activeChannel;
     }
 
