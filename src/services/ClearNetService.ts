@@ -17,8 +17,8 @@ export interface ChannelData {
 }
 
 class ClearNetService {
-    private client: NitroliteClient | null = null;
-    private config: any = null; // Store the config for wallet client access
+    public client!: NitroliteClient;
+    public config: NitroliteClientConfig | null = null;
     private isConnected = false;
     private currentAddress: string | null = null;
     private activeChannel: ChannelData | null = null;
@@ -63,25 +63,8 @@ class ClearNetService {
             // Initialize the Nitrolite client
             this.client = new NitroliteClient(config);
             console.log("Nitrolite client initialized", this.client);
-            console.log("Start Deposit");
-            // const depositResponse = await this.client.deposit(BigInt(1000));
-            // console.log("Deposit response:", depositResponse);
-            console.log("Start Create Channel");
-            const nitroChannelId = localStorage.getItem("nitro_channel_id");
-            let createChannelResponse;
-            if (!nitroChannelId) {
-                createChannelResponse = await this.client.createChannel({
-                    initialAllocationAmounts: [BigInt(1000), BigInt(0)],
-                    stateData: "0x",
-                });
-            }
-            console.log("Create channel response:", createChannelResponse);
-
             this.currentAddress = config.walletClient.account.address;
-
-            if (createChannelResponse && createChannelResponse.channelId) {
-                localStorage.setItem("nitro_channel_id", createChannelResponse.channelId);
-            }
+            console.log("Current wallet client address:", this.currentAddress);
 
             // Initialize WebSocket connection to ClearNet
             console.log("Initializing WebSocket connection...");
@@ -92,7 +75,7 @@ class ClearNetService {
             return true;
         } catch (error) {
             console.error("Failed to initialize ClearNet client:", error);
-            return false;
+            throw error; // Throw the error instead of returning false
         }
     }
 
@@ -135,7 +118,7 @@ class ClearNetService {
 
                     try {
                         // Log wallet client details for debugging
-                        console.log("Wallet client account:", this.client?.config?.walletClient?.account);
+                        console.log("Wallet client account:", this.config?.walletClient?.account);
                         console.log("Current address:", this.currentAddress);
 
                         // Authenticate with the broker
@@ -404,38 +387,6 @@ class ClearNetService {
         }
     }
 
-    /**
-     * Sends a JSONRPC request to the broker and waits for the response
-     */
-    private async sendJsonRpcRequest(request: any): Promise<any> {
-        if (!this.wsConnection || this.wsConnection.readyState !== WebSocket.OPEN) {
-            await this.initializeWebSocket();
-
-            if (!this.wsConnection || this.wsConnection.readyState !== WebSocket.OPEN) {
-                throw new Error("WebSocket not connected");
-            }
-        }
-
-        return new Promise((resolve, reject) => {
-            const requestId = request.id || `req-${Date.now()}`;
-            request.id = requestId;
-
-            // Set timeout for the request
-            const timeout = setTimeout(() => {
-                if (this.pendingRequests.has(requestId)) {
-                    this.pendingRequests.delete(requestId);
-                    reject(new Error("Request timeout"));
-                }
-            }, 15000); // 15 second timeout
-
-            // Add the request to pending requests
-            this.pendingRequests.set(requestId, { resolve, reject, timeout });
-
-            // Send the request
-            this.wsConnection?.send(JSON.stringify(request));
-        });
-    }
-
     async depositAndCreateChannel(amount: bigint, stateData: string): Promise<ChannelData | null> {
         if (!this.client || !this.isConnected) {
             console.error("ClearNet client not initialized");
@@ -451,7 +402,6 @@ class ClearNetService {
                 initialAllocationAmounts: [amount, BigInt(0)],
                 stateData,
             });
-
             if (!result || !result.channelId) {
                 throw new Error("Failed to create channel: Invalid response");
             }

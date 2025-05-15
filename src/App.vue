@@ -14,39 +14,39 @@ const errorMessage = ref('');
 const channelData = ref(null);
 const gameSessionId = ref('');
 
-const connectWebSocket = () => {
+const connectGameServerWebSocket = () => {
   // Use production URL in production, or local development server
   // This handles both development and production environments
   const host = window.location.hostname;
   const port = import.meta.env.PROD ? window.location.port : '3001';
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  
+
   const wsUrl = `${protocol}//${host}${port ? ':' + port : ''}`;
   socket.value = new WebSocket(wsUrl);
-  
+
   socket.value.onopen = () => {
     isConnected.value = true;
     console.log('WebSocket connected');
   };
-  
+
   socket.value.onclose = () => {
     isConnected.value = false;
     console.log('WebSocket disconnected');
   };
-  
+
   socket.value.onerror = (error) => {
     console.error('WebSocket error:', error);
     errorMessage.value = 'Connection error. Please try again.';
   };
-  
+
   socket.value.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      
+
       if (data.type === 'roomCreated' || data.type === 'roomJoined') {
         roomId.value = data.roomId;
         playerId.value = data.playerId;
-        
+
         // Start vApp session with ClearNet
         startGameSession(data.roomId, data.playerId);
       } else if (data.type === 'error') {
@@ -78,7 +78,7 @@ const startGameSession = async (gameRoomId: string, gamePlayerId: string) => {
     nickname: nickname.value,
     timestamp: Date.now()
   };
-  
+
   try {
     // Get active channel from ClearNet service
     const activeChannel = clearNetService.getActiveChannel();
@@ -87,7 +87,7 @@ const startGameSession = async (gameRoomId: string, gamePlayerId: string) => {
       errorMessage.value = 'No active channel found. Please create or join a channel first.';
       return;
     }
-    
+
     // Start the game session
     const session = await clearNetService.openGameSession(JSON.stringify(initialState));
     if (session) {
@@ -108,15 +108,15 @@ const updateGameState = async (stateData: string) => {
   try {
     // Create a monotonically increasing version using timestamp
     const version = BigInt(Math.floor(Date.now() / 1000));
-    
+
     // Update the game state in our local channel
     const success = await clearNetService.updateGameState(stateData, version);
-    
+
     if (!success) {
       console.error('Failed to update game state in channel');
       return;
     }
-    
+
     // If we have an active channel, send the state update to other participants
     const activeChannel = clearNetService.getActiveChannel();
     if (activeChannel && socket.value && socket.value.readyState === WebSocket.OPEN) {
@@ -136,7 +136,7 @@ const updateGameState = async (stateData: string) => {
 const handleStateSignRequest = async (channelId: string, state: any, stateId: string) => {
   try {
     const signatureData = await clearNetService.signState(state, stateId, channelId);
-    
+
     if (signatureData && socket.value && socket.value.readyState === WebSocket.OPEN) {
       socket.value.send(JSON.stringify({
         type: 'stateSignature',
@@ -162,7 +162,7 @@ const handleGameOver = async () => {
         gameOver: true,
         endTimestamp: Date.now()
       };
-      
+
       // Close the game session and finalize the channel
       await clearNetService.closeGameSession(finalState);
       gameSessionId.value = '';
@@ -178,19 +178,19 @@ const createRoom = () => {
     errorMessage.value = 'Not connected to server';
     return;
   }
-  
+
   if (!nickname.value.trim()) {
     errorMessage.value = 'Please enter a nickname';
     return;
   }
-  
+
   // Check if we have an active channel
   const activeChannel = clearNetService.getActiveChannel();
   if (!activeChannel) {
     errorMessage.value = 'Please create a channel first';
     return;
   }
-  
+
   // Include channel ID in room creation request
   socket.value.send(JSON.stringify({
     type: 'createRoom',
@@ -205,24 +205,24 @@ const joinRoom = () => {
     errorMessage.value = 'Not connected to server';
     return;
   }
-  
+
   if (!nickname.value.trim()) {
     errorMessage.value = 'Please enter a nickname';
     return;
   }
-  
+
   if (!roomId.value.trim()) {
     errorMessage.value = 'Please enter a room ID';
     return;
   }
-  
+
   // Check if we have an active channel
   const activeChannel = clearNetService.getActiveChannel();
   if (!activeChannel) {
     errorMessage.value = 'Please join a channel first';
     return;
   }
-  
+
   // Include channel ID in join request
   socket.value.send(JSON.stringify({
     type: 'joinRoom',
@@ -241,14 +241,14 @@ watch(() => currentScreen.value, (newScreen, oldScreen) => {
 });
 
 onMounted(() => {
-  connectWebSocket();
+  connectGameServerWebSocket();
 });
 
 onUnmounted(() => {
   if (socket.value) {
     socket.value.close();
   }
-  
+
   // Clean up game session if needed
   if (gameSessionId.value) {
     handleGameOver();
@@ -261,14 +261,14 @@ onUnmounted(() => {
     <header>
       <h1>Nitro Snake</h1>
     </header>
-    
+
     <main>
       <div v-if="!isConnected" class="connection-error">
         Connecting to server...
       </div>
-      
+
       <div v-else>
-        <LobbyScreen 
+        <LobbyScreen
           v-if="currentScreen === 'lobby'"
           v-model:nickname="nickname"
           v-model:roomId="roomId"
@@ -276,8 +276,8 @@ onUnmounted(() => {
           @create-room="createRoom"
           @join-room="joinRoom"
         />
-        
-        <GameRoom 
+
+        <GameRoom
           v-else-if="currentScreen === 'game'"
           :socket="socket"
           :roomId="roomId"

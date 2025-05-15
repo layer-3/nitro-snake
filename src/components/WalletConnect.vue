@@ -16,13 +16,9 @@ const isAuthenticated = ref(false);
 const walletAddress = ref("");
 const balance = ref(BigInt(0));
 const walletError = ref("");
-const ws = ref<WebSocket | null>(null);
 
 // Storage keys
 const KEY_PAIR = "crypto_keypair";
-
-// Connection settings
-const AUTH_TIMEOUT = 15000; // 15 seconds
 
 // Event emitters
 const emit = defineEmits<{
@@ -30,6 +26,8 @@ const emit = defineEmits<{
     "wallet-disconnected": [];
     error: [string];
 }>();
+
+onMounted(() => { connectWallet(); });
 
 // Wallet signer interface following server implementation
 interface WalletSigner {
@@ -64,124 +62,6 @@ async function getOrCreateWalletSigner(): Promise<WalletSigner> {
 }
 
 /**
- * Connects to the WebSocket server
- */
-function connectToWebSocket(): Promise<WebSocket> {
-    return new Promise((resolve, reject) => {
-        const webSocket = new WebSocket(BROKER_WS_URL);
-
-        const connectTimeout = setTimeout(() => {
-            reject(new Error("WebSocket connection timeout"));
-        }, 10000);
-
-        webSocket.onopen = () => {
-            clearTimeout(connectTimeout);
-            ws.value = webSocket;
-            console.log("WebSocket connection established");
-            resolve(webSocket);
-        };
-
-        webSocket.onerror = (error) => {
-            clearTimeout(connectTimeout);
-            console.error("WebSocket connection error:", error);
-            reject(new Error("Failed to connect to WebSocket server"));
-        };
-
-        webSocket.onclose = () => {
-            console.log("WebSocket connection closed");
-            isConnected.value = false;
-            isAuthenticated.value = false;
-        };
-    });
-}
-
-/**
- * Authenticates with the broker using the wallet signer
- */
-async function authenticateWithBroker(webSocket: WebSocket, signer: WalletSigner): Promise<void> {
-    return new Promise((resolve, reject) => {
-        let authTimeout: number | null = null;
-
-        // Clean up function
-        const cleanup = () => {
-            if (authTimeout) {
-                clearTimeout(authTimeout);
-                authTimeout = null;
-            }
-            webSocket.removeEventListener("message", authMessageHandler);
-        };
-
-        // Set authentication timeout
-        authTimeout = setTimeout(() => {
-            cleanup();
-            reject(new Error("Authentication timeout"));
-        }, AUTH_TIMEOUT) as unknown as number;
-
-        // Message handler for authentication flow
-        const authMessageHandler = async (event: MessageEvent) => {
-            try {
-                const message = JSON.parse(event.data);
-                console.log("Auth message received:", message);
-
-                // Handle auth challenge
-                if (message.res && message.res[1] === "auth_challenge") {
-                    console.log("Received auth challenge, creating verify message");
-
-                    try {
-                        // Create auth verify message using raw challenge response
-                        const authVerify = await createAuthVerifyMessage(
-                            signer.sign,
-                            event.data, // Raw challenge data
-                            signer.address
-                        );
-
-                        console.log("Sending auth verify:", authVerify);
-                        webSocket.send(authVerify);
-                    } catch (error) {
-                        console.error("Failed to create auth verify message:", error);
-                        cleanup();
-                        reject(new Error("Failed to create auth verify message"));
-                    }
-                }
-                // Handle auth success
-                else if (message.res && message.res[1] === "auth_verify") {
-                    console.log("Authentication successful");
-                    cleanup();
-                    isAuthenticated.value = true;
-                    resolve();
-                }
-                // Handle auth error
-                else if (message.res && message.res[1] === "error") {
-                    const errorMessage = message.res[2] && message.res[2][0]?.error ? message.res[2][0].error : "Unknown authentication error";
-                    console.error("Authentication error:", errorMessage);
-                    cleanup();
-                    reject(new Error(errorMessage));
-                }
-            } catch (error) {
-                console.error("Error processing auth message:", error);
-                // Don't reject yet, it might be an unrelated message
-            }
-        };
-
-        // Add message listener
-        webSocket.addEventListener("message", authMessageHandler);
-
-        // Start authentication process
-        console.log("Starting authentication with address:", signer.address);
-        createAuthRequestMessage(signer.sign, signer.address)
-            .then((authRequest) => {
-                console.log("Sending auth request:", authRequest);
-                webSocket.send(authRequest);
-            })
-            .catch((error) => {
-                console.error("Failed to create auth request:", error);
-                cleanup();
-                reject(new Error("Failed to create auth request"));
-            });
-    });
-}
-
-/**
  * Main connect function that establishes connection and authenticates
  */
 async function connectWallet() {
@@ -196,14 +76,6 @@ async function connectWallet() {
         walletAddress.value = signer.address;
 
         console.log("Using wallet with address:", signer.address);
-
-        // Connect to WebSocket
-        console.log("Connecting to WebSocket server...");
-        const webSocket = await connectToWebSocket();
-
-        // Authenticate with broker
-        console.log("Authenticating with broker...");
-        await authenticateWithBroker(webSocket, signer);
 
         // Set fake balance for display purposes
         balance.value = BigInt(1000000000000000000); // 1 ETH
@@ -311,17 +183,6 @@ async function connectWallet() {
             address: signer.address,
             balance: balance.value,
         });
-
-        // Set up message handler for ongoing communication
-        webSocket.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data);
-                console.log("Received message:", message);
-                // Handle different message types here
-            } catch (error) {
-                console.error("Error parsing message:", error);
-            }
-        };
     } catch (error) {
         console.error("Failed to connect:", error);
         walletError.value = error instanceof Error ? error.message : "Unknown error";
@@ -335,20 +196,14 @@ async function connectWallet() {
  * Disconnects from the broker
  */
 function disconnectWallet() {
-    // Close WebSocket connection if it exists
-    if (ws.value) {
-        ws.value.close();
-        ws.value = null;
-    }
-
     // Reset all state variables
     isConnected.value = false;
     isAuthenticated.value = false;
     walletAddress.value = "";
     balance.value = BigInt(0);
 
-    // Note: We don't remove the private key from localStorage
-    // to maintain a consistent identity across sessions
+    // Private key is preserved in localStorage
+    // to maintain identity consistency across sessions
 
     // Emit disconnected event
     emit("wallet-disconnected");
@@ -368,27 +223,12 @@ function formatAddress(address: string): string {
 function formatBalance(balanceWei: bigint): string {
     return (Number(balanceWei) / 1e18).toFixed(4);
 }
-
-// Try to reconnect on component mount if we have a stored key
-onMounted(async () => {
-    // Check if we have a stored private key
-    const savedPrivateKey = localStorage.getItem(KEY_PAIR);
-
-    if (savedPrivateKey) {
-        console.log("Found stored private key, attempting auto-connect");
-        try {
-            await connectWallet();
-        } catch (error) {
-            console.error("Auto-connect failed:", error);
-        }
-    }
-});
 </script>
 
 <template>
     <div class="wallet-connect">
         <div v-if="!isConnected" class="connect-container">
-            <button @click="connectWallet" class="connect-btn" :disabled="isConnecting">
+            <button class="connect-btn" :disabled="isConnecting">
                 {{ isConnecting ? "Connecting..." : "Connect to Broker" }}
             </button>
             <div v-if="walletError" class="error-message">{{ walletError }}</div>
