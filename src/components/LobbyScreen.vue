@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { defineEmits, defineProps, ref } from 'vue';
+import { defineEmits, defineProps, ref, onUnmounted, watch } from 'vue';
 import WalletConnect from './WalletConnect.vue';
 import ChannelSetup from './ChannelSetup.vue';
+import gameService from '../services/GameService';
 
 const props = defineProps<{
   nickname: string;
@@ -12,6 +13,7 @@ const props = defineProps<{
 const emit = defineEmits([
   'update:nickname',
   'update:roomId',
+  'update:errorMessage',
   'create-room',
   'join-room'
 ]);
@@ -22,6 +24,17 @@ const isCreatingRoom = ref(false);
 const isJoiningRoom = ref(false);
 const walletAddress = ref('');
 const channelInfo = ref<any>(null);
+
+// Subscribe to GameService state
+const isConnected = gameService.getIsConnected();
+const gameError = gameService.getErrorMessage();
+
+// Watch for error messages from GameService
+watch(gameError, (newError) => {
+  if (newError) {
+    emit('update:errorMessage', newError);
+  }
+});
 
 const updateNickname = (e: Event) => {
   emit('update:nickname', (e.target as HTMLInputElement).value);
@@ -34,6 +47,7 @@ const updateRoomId = (e: Event) => {
 const createRoom = () => {
   if (isChannelCreated.value) {
     isCreatingRoom.value = true;
+    gameService.createRoom(props.nickname, channelInfo.value.channelId, walletAddress.value);
     emit('create-room');
   } else {
     emit('update:errorMessage', 'Please create a channel first');
@@ -43,6 +57,7 @@ const createRoom = () => {
 const joinRoom = () => {
   if (isChannelCreated.value) {
     isJoiningRoom.value = true;
+    gameService.joinRoom(props.roomId, props.nickname, channelInfo.value.channelId, walletAddress.value);
     emit('join-room');
   } else {
     emit('update:errorMessage', 'Please join a channel first');
@@ -63,12 +78,13 @@ const onWalletDisconnected = () => {
 };
 
 // Handle channel creation events
-const onChannelCreated = (data: any) => {
+const onChannelCreated = async (data: any) => {
+  console.log("onChannelCreated", data);
   isChannelCreated.value = true;
   channelInfo.value = data;
 };
 
-const onChannelJoined = (data: any) => {
+const onChannelJoined = async (data: any) => {
   isChannelCreated.value = true;
   channelInfo.value = data;
 };
@@ -88,6 +104,11 @@ function generateRoomId(): string {
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 }
+
+// Clean up on component unmount
+onUnmounted(() => {
+  gameService.disconnect();
+});
 </script>
 
 <template>
