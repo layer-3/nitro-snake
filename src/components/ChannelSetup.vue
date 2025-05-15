@@ -32,8 +32,30 @@ const errorMessage = ref('');
 const isCreating = ref(false);
 const isJoining = ref(false);
 const showAdvanced = ref(false);
-const channelData = ref(null);
-const tokenDecimals = ref<number>(18); // Default to 18, will be updated from contract
+const channelData = ref<ChannelResponse | null>(null);
+const tokenDecimals = ref<number>(18); // will be updated with value from contract
+
+interface ChannelResponse {
+    channelId: string;
+    state?: any;
+    initialState?: {
+        allocations: Array<{
+            amount: bigint;
+            destination: string;
+            token: string;
+        }>;
+        data: string;
+        intent: number;
+        sigs: Array<{
+            r: string;
+            s: string;
+            v: number;
+        }>;
+        version: bigint;
+    };
+    txHash?: string;
+}
+type ChannelData = ChannelResponse;
 
 // Convert ETH to Wei using contract decimals
 const depositAmountWei = computed(() => {
@@ -199,20 +221,20 @@ async function createChannel() {
         }
 
         try {
-            // Create the channel using the proper Nitrolite client
-            console.log("Start Deposit");
-            const depositResponse = await clearNetService.client.deposit(depositAmountWei.value);
-            console.log("Deposit response:", depositResponse);
             console.log("Start Create Channel");
             const nitroChannelId = localStorage.getItem("nitro_channel_id");
             let createChannelResponse;
             if (!nitroChannelId) {
+                // Create the channel using the proper Nitrolite client
+                console.log("Start Deposit");
+                const depositResponse = await clearNetService.client.deposit(depositAmountWei.value);
+                console.log("Deposit response:", depositResponse);
                 createChannelResponse = await clearNetService.client.createChannel({
                     initialAllocationAmounts: [depositAmountWei.value, BigInt(0)],
                     stateData: "0x",
                 });
+                console.log("Create channel response:", createChannelResponse);
             }
-            console.log("Create channel response:", createChannelResponse);
             if (createChannelResponse && createChannelResponse.channelId) {
                 localStorage.setItem("nitro_channel_id", createChannelResponse.channelId);
                 channelData.value = createChannelResponse;
@@ -511,204 +533,204 @@ onMounted(async () => {
 
 h3 {
     margin-top: 0;
-        margin-bottom: 20px;
-        color: #333;
-    }
+    margin-bottom: 20px;
+    color: #333;
+}
 
-        .form-group {
-            margin-bottom: 15px;
-        }
+.form-group {
+    margin-bottom: 15px;
+}
 
-        label {
-            display: block;
-            margin-bottom: 6px;
-            font-weight: 600;
-            color: #555;
-        }
+label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: #555;
+}
 
-        input {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 16px;
-        }
+input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 16px;
+}
 
-        input:focus {
-            border-color: #4CAF50;
-            outline: none;
-        }
+input:focus {
+    border-color: #4CAF50;
+    outline: none;
+}
 
-        small {
-            display: block;
-            color: #888;
-            margin-top: 4px;
-            font-size: 0.85em;
-        }
+small {
+    display: block;
+    color: #888;
+    margin-top: 4px;
+    font-size: 0.85em;
+}
 
-        .actions {
-            margin-top: 20px;
-        }
+.actions {
+    margin-top: 20px;
+}
 
-        .create-btn,
-        .join-btn {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 4px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
+.create-btn,
+.join-btn {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
 
-        .create-btn {
-            background-color: #4CAF50;
-            color: white;
-        }
+.create-btn {
+    background-color: #4CAF50;
+    color: white;
+}
 
-        .create-btn:hover:not(:disabled) {
-            background-color: #388E3C;
-        }
+.create-btn:hover:not(:disabled) {
+    background-color: #388E3C;
+}
 
-        .join-btn {
-            background-color: #2196F3;
-            color: white;
-        }
+.join-btn {
+    background-color: #2196F3;
+    color: white;
+}
 
-        .join-btn:hover:not(:disabled) {
-            background-color: #1976D2;
-        }
+.join-btn:hover:not(:disabled) {
+    background-color: #1976D2;
+}
 
-        .create-btn:disabled,
-        .join-btn:disabled {
-            background-color: #9e9e9e;
-            cursor: not-allowed;
-        }
+.create-btn:disabled,
+.join-btn:disabled {
+    background-color: #9e9e9e;
+    cursor: not-allowed;
+}
 
-        .advanced-toggle {
-            text-align: center;
-            margin-top: 15px;
-            color: #2196F3;
-            cursor: pointer;
-            font-size: 0.9em;
-        }
+.advanced-toggle {
+    text-align: center;
+    margin-top: 15px;
+    color: #2196F3;
+    cursor: pointer;
+    font-size: 0.9em;
+}
 
-        .advanced-toggle:hover {
-            text-decoration: underline;
-        }
+.advanced-toggle:hover {
+    text-decoration: underline;
+}
 
-        .advanced-options {
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #eee;
-        }
+.advanced-options {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #eee;
+}
 
-        .error-message {
-            background-color: #ffebee;
-            color: #c62828;
-            padding: 10px;
-            border-radius: 4px;
-            margin-top: 20px;
-            text-align: center;
-        }
+.error-message {
+    background-color: #ffebee;
+    color: #c62828;
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 20px;
+    text-align: center;
+}
 
-        .channel-info {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #e8f5e9;
-            border-radius: 4px;
-        }
+.channel-info {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #e8f5e9;
+    border-radius: 4px;
+}
 
-        .info-item {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 8px;
-        }
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
 
-        .info-item:last-child {
-            margin-bottom: 0;
-        }
+.info-item:last-child {
+    margin-bottom: 0;
+}
 
-        .label {
-            font-weight: 600;
-            color: #555;
-        }
+.label {
+    font-weight: 600;
+    color: #555;
+}
 
-        .value {
-            font-family: monospace;
-        }
+.value {
+    font-family: monospace;
+}
 
-        .success {
-            color: #4CAF50;
-            font-weight: bold;
-        }
+.success {
+    color: #4CAF50;
+    font-weight: bold;
+}
 
-        /* Metamask styles */
-        .metamask-status {
-            margin-bottom: 20px;
-            padding: 12px 15px;
-            border-radius: 8px;
-            background-color: #fffbf5;
-            border: 1px solid #f5a623;
-        }
+/* Metamask styles */
+.metamask-status {
+    margin-bottom: 20px;
+    padding: 12px 15px;
+    border-radius: 8px;
+    background-color: #fffbf5;
+    border: 1px solid #f5a623;
+}
 
-        .metamask-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+.metamask-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
 
-        .metamask-icon {
-            width: 30px;
-            height: 30px;
-        }
+.metamask-icon {
+    width: 30px;
+    height: 30px;
+}
 
-        .metamask-balance {
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
+.metamask-balance {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
 
-        .metamask-address {
-            font-family: monospace;
-            color: #666;
-            font-size: 0.9em;
-        }
+.metamask-address {
+    font-family: monospace;
+    color: #666;
+    font-size: 0.9em;
+}
 
-        .metamask-network {
-            font-size: 0.85em;
-            color: #1976D2;
-            margin-top: 3px;
-        }
+.metamask-network {
+    font-size: 0.85em;
+    color: #1976D2;
+    margin-top: 3px;
+}
 
-        .network-testnet {
-            color: #f57c00;
-        }
+.network-testnet {
+    color: #f57c00;
+}
 
-        .metamask-details {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
+.metamask-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
 
-        .connect-metamask-btn {
-            background-color: #f5a623;
-            color: white;
-            border: none;
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 6px;
-            transition: background-color 0.2s;
-        }
+.connect-metamask-btn {
+    background-color: #f5a623;
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 6px;
+    transition: background-color 0.2s;
+}
 
-        .connect-metamask-btn:hover:not(:disabled) {
-            background-color: #e09216;
-        }
+.connect-metamask-btn:hover:not(:disabled) {
+    background-color: #e09216;
+}
 
-        .connect-metamask-btn:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
+.connect-metamask-btn:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
 }
 </style>
