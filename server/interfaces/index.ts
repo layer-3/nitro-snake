@@ -1,3 +1,4 @@
+import { Hex } from 'viem';
 import { WebSocket } from 'ws';
 
 export interface SnakeWebSocket extends WebSocket {
@@ -24,7 +25,7 @@ export interface Room {
   gridSize: { width: number; height: number };
   isGameOver?: boolean;
   channelIds: Set<string>;
-  appId?: string;
+  appId?: Hex;
   playerAddresses: Map<string, string>; // Maps playerId to their ethereum address
   currentState: any;
   stateVersion: number;

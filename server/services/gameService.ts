@@ -191,9 +191,6 @@ export async function broadcastGameState(roomId: string): Promise<void> {
       !highest || player.score > highest.score ? player : highest
     , players[0]);
 
-    // Get the channel ID
-    const channelId = Array.from(room.channelIds)[0];
-
     // Determine allocations
     // Give all the money to the player with the highest score
     // We could also distribute proportionally based on scores
@@ -206,18 +203,8 @@ export async function broadcastGameState(roomId: string): Promise<void> {
     }
 
     try {
-      // Close the app session with the final state and allocations
-      await closeAppSession(
-        room.appId,
-        channelId,
-        {
-          finalGameState: gameState,
-          winner: winner.id,
-          scores: players.map(p => ({ id: p.id, score: p.score })),
-          timestamp: Date.now()
-        },
-        allocations
-      );
+      // Close the app session with the final allocations
+      await closeAppSession(room.appId, allocations);
       console.log(`Closed app session for room ${roomId} with winner ${winner.id}`);
     } catch (error) {
       console.error(`Error closing app session for room ${roomId}:`, error);

@@ -14,6 +14,7 @@ import {
     NitroliteRPC,
     getRequestId,
     createGetLedgerBalancesMessage,
+    createCloseAppSessionMessage,
 } from "@erc7824/nitrolite";
 import { BROKER_WS_URL, CONTRACT_ADDRESSES, POLYGON_RPC_URL, WALLET_PRIVATE_KEY } from "../config";
 import { setBrokerWebSocket, getBrokerWebSocket, addPendingRequest, getPendingRequest, clearPendingRequest } from "./stateService";
@@ -85,13 +86,15 @@ async function createBrokerChannel(client: NitroliteClient): Promise<void> {
     console.log("Created channel", createChannelResponse);
 
     // Check if broker joined the channel
-    const brokerWs = getBrokerWebSocket();
-    const active = brokerWs && (brokerWs.readyState === WebSocket.OPEN || brokerWs.readyState === WebSocket.CONNECTING);
-    if (!active) { return; }
-    getChannels(brokerWs);
+    getChannels();
 }
 
-async function getChannels(brokerWs: WebSocket): Promise<void> {
+async function getChannels(): Promise<void> {
+    const brokerWs = getBrokerWebSocket();
+    if (!brokerWs || brokerWs.readyState !== WebSocket.OPEN) {
+        throw new Error("WebSocket not connected");
+    }
+
     const signer = createEthersSigner(WALLET_PRIVATE_KEY);
     const params = [{ participant: signer.address }];
     const request = NitroliteRPC.createRequest(10, "get_channels", params);
@@ -194,7 +197,7 @@ async function authenticateWithBroker(): Promise<void> {
 
                         brokerWs.send(authVerify);
                         brokerWs.send(getBalances);
-                        await getChannels(brokerWs);
+                        await getChannels();
                     } catch (error) {
                         console.error("Error creating auth verify message:", error);
                         cleanup();
@@ -420,24 +423,6 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
     }
 
     // Prepare the request object
-
-    // const requestId = Date.now();
-    // const method = "create_app_session";
-    // const intents = [Number(allocations[0]), Number(allocations[1]), 0];
-    // const reqParams = [{
-    //   definition: {
-    //     protocol: "nitroliterpc",
-    //     participants: participants.map(p => p as Hex),
-    //     weights: [0, 0, 100], // Alice: 0, Bob: 0, Server: 100
-    //     quorum: 100,
-    //     challenge: 0,
-    //     nonce: Date.now(),
-    //   },
-    //   token: CONTRACT_ADDRESSES.tokenAddress as Hex,
-    //   allocations: intents
-    // }];
-    // const timestamp = Math.floor(Date.now() / 1000);
-    // console.log({ requestId, method, reqParams: reqParams[0], timestamp, participants: reqParams[0].definition.participants });
     const participants = [participantA, participantB, signer.address as Hex];
     const initialIntent = [0, 0, 0];
     console.log("signer", signer);
@@ -455,23 +440,14 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
 
     const signedMessage = await createAppSessionMessage(
         signer.sign,
-        [
-            {
-                definition: appDefinition,
-                token: CONTRACT_ADDRESSES.tokenAddress as Hex,
-                allocations: initialIntent,
-            },
-        ],
+        [{
+            definition: appDefinition,
+            token: CONTRACT_ADDRESSES.tokenAddress as Hex,
+            allocations: initialIntent,
+        }],
         initialIntent
     );
     console.log("Signed message", signedMessage);
-
-    // Create request data - we'll sign it in sendToBroker
-    // const request = {
-    //   req: [requestId, method, reqParams, timestamp],
-    //   sig: [""], // Will be filled in by sendToBroker
-    //   int: intents
-    // };
 
     const result = await sendToBroker(signedMessage);
     const appId = result.app_id || (typeof result[0] === "object" ? result[0].app_id : null);
@@ -480,44 +456,33 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
 }
 
 // Closes an application session in the broker
-export async function closeAppSession(appId: string, channelId: string, finalState: any, allocations: number[]): Promise<boolean> {
+export async function closeAppSession(appId: Hex, allocations: number[]): Promise<void> {
     // Ensure we're authenticated before closing an app session
     if (!isAuthenticated) {
         try {
             await authenticateWithBroker();
         } catch (error) {
             console.error(`Authentication failed before closing app session: ${error.message}`);
-            return false;
+            throw new Error(`Authentication required to close app session: ${error.message}`);
         }
     }
 
-    // Prepare the request object
-    const requestId = Date.now();
-    const method = "close_app_session";
-    const reqParams = [
-        {
-            app_id: appId,
-            channel_id: channelId,
-            allocations: allocations,
-            final_state: JSON.stringify(finalState),
-        },
-    ];
-    const timestamp = Math.floor(Date.now() / 1000);
-
-    // Create request data - we'll sign it in sendToBroker
-    const request = {
-        req: [requestId, method, reqParams, timestamp],
-        sig: [""], // Will be filled in by sendToBroker
-    };
-
-    try {
-        await sendToBroker(request);
-        console.log(`Closed app session ${appId} for channel ${channelId}`);
-        return true;
-    } catch (error) {
-        console.error(`Error closing app session ${appId}:`, error);
-        return false;
+    // Get the server's wallet address
+    const signer = createEthersSigner(WALLET_PRIVATE_KEY);
+    if (!signer.address) {
+        throw new Error("Server wallet address not found");
     }
+
+    // Prepare the request object
+    const request = await createCloseAppSessionMessage(
+        signer.sign,
+        [{
+            app_id: appId,
+            allocations: allocations,
+        }],
+        allocations,
+    );
+    await sendToBroker(request);
 }
 
 // Helper function to sign state data with the server's private key

@@ -3,7 +3,7 @@ import { Room, PendingRequest } from '../interfaces';
 
 // Global state
 export const rooms = new Map<string, Room>();
-export let brokerWs: WebSocket | null = null;
+let brokerWs: WebSocket | null = null;
 export const pendingRequests = new Map<string, PendingRequest>();
 
 // Set broker WebSocket connection
