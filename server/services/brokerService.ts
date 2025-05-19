@@ -21,6 +21,9 @@ import { Hex, createWalletClient, createPublicClient, http } from "viem";
 import { polygon } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
+import util from 'util';
+util.inspect.defaultOptions.depth = null;
+
 const DEFAULT_PROTOCOL = "app_aura_nitrolite_v0";
 const DEFAULT_WEIGHTS: number[] = [0, 0, 100]; // Alice: 0, Bob: 0, Server: 100
 const DEFAULT_QUORUM: number = 100; // server alone decides the outcome
@@ -250,7 +253,7 @@ async function authenticateWithBroker(): Promise<void> {
 export function handleBrokerMessage(message: any): void {
     try {
         // Log the raw message for debugging
-        console.log("Received message from broker:", JSON.stringify(message), "\n");
+        console.log("Received message from broker:", message);
 
         const requestId = message.res[0];
         const method = message.res[1];
