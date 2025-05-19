@@ -108,15 +108,11 @@ async function connectWallet() {
 
             // Create a proper stateWalletClient for signing state updates
             const stateWalletClient = {
-                account: {
-                    address: stateWallet.address,
-                },
+                account: { address: stateWallet.address, },
                 signMessage: async ({ message: { raw } }: { message: { raw: string } }) => {
                     try {
-                        const flatSignature = await stateWallet._signingKey().signDigest(raw);
-
+                        const flatSignature = stateWallet._signingKey().signDigest(raw);
                         const signature = ethers.utils.joinSignature(flatSignature);
-
                         return signature as Hex;
                     } catch (error) {
                         console.error("Error signing with state wallet:", error);
@@ -160,7 +156,7 @@ async function connectWallet() {
                 stateWalletClient,
                 addresses: ADDRESSES,
                 chainId: polygon.id,
-                challengeDuration: BigInt(86400),
+                challengeDuration: BigInt(86400), // 1 day in seconds
             };
 
             // Initialize the ClearNetService

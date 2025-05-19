@@ -6,13 +6,18 @@ import {
   RequestData,
   ResponsePayload,
   MessageSigner,
+  NitroliteClient,
+  NitroliteClientConfig,
+  createAppSessionMessage,
+  Intent,
   AppDefinition,
-  CreateAppSessionRequest
 } from '@erc7824/nitrolite';
 import {
   BROKER_WS_URL,
   CONTRACT_ADDRESSES,
-  SERVER_PRIVATE_KEY
+  POLYGON_RPC_URL,
+  SERVER_PRIVATE_KEY,
+  WALLET_PRIVATE_KEY
 } from '../config';
 import {
   setBrokerWebSocket,
@@ -21,11 +26,74 @@ import {
   getPendingRequest,
   clearPendingRequest
 } from './stateService';
-import { RPCRequest, RPCResponse, ChallengeData } from '../interfaces';
-import { Hex } from 'viem';
+import { Hex, createWalletClient, createPublicClient, http } from 'viem';
+import { polygon } from "viem/chains";
+import { privateKeyToAccount } from 'viem/accounts';
+
+const DEFAULT_PROTOCOL = 'app_aura_nitrolite_v0';
+const DEFAULT_WEIGHTS: number[] = [0, 0, 100]; // Alice: 0, Bob: 0, Server: 100
+const DEFAULT_QUORUM: number = 100; // server alone decides the outcome
 
 // Flag to indicate if we've authenticated with the broker
 let isAuthenticated = false;
+let client: NitroliteClient = await createClient();
+
+async function createClient(): Promise<NitroliteClient> {
+  // Create the wallet client using the ethereum provider
+  const walletClient = createWalletClient({
+    transport: http(POLYGON_RPC_URL),
+    chain: polygon,
+    account: privateKeyToAccount(WALLET_PRIVATE_KEY),
+  });
+
+  const publicClient = createPublicClient({
+    transport: http(POLYGON_RPC_URL),
+    chain: polygon,
+  });
+
+  // Create a dedicated client for signing state updates
+  const stateWallet = new ethers.Wallet(WALLET_PRIVATE_KEY);
+  const stateWalletClient = {
+    ...stateWallet,
+    account: { address: stateWallet.address, },
+    signMessage: async ({ message: { raw } }: { message: { raw: string } }) => {
+      const flatSignature = stateWallet._signingKey().signDigest(raw);
+      const signature = ethers.utils.joinSignature(flatSignature);
+      return signature as Hex;
+    },
+  };
+
+  const config: NitroliteClientConfig = {
+    publicClient,
+    walletClient,
+    stateWalletClient,
+    addresses: CONTRACT_ADDRESSES,
+    chainId: polygon.id,
+    challengeDuration: BigInt(86400), // 1 day in seconds
+  };
+  const client = new NitroliteClient(config);
+  await createBrokerChannel(client);
+
+  return client;
+}
+
+async function createBrokerChannel(client: NitroliteClient): Promise<void> {
+  // Verify if the channel already exists
+  const channels = await client.getAccountChannels();
+  console.log('Channels', channels);
+  if (channels.length > 0) {
+    console.log('Channel already exists, skipping creation');
+    return;
+  }
+
+  // Create a channel with the broker
+  const depositAmount = 10n; // 0.00001 USDC on Polygon
+  const createChannelResponse = await client.depositAndCreateChannel(depositAmount,{
+    initialAllocationAmounts: [0n, 0n],
+    stateData: "0x"
+  });
+  console.log('Created channel', createChannelResponse);
+}
 
 // Connects to the Nitrolite broker
 export function connectToBroker(): void {
@@ -81,6 +149,9 @@ async function authenticateWithBroker(): Promise<void> {
   // Create the wallet signer using our factory
   const signer = createEthersSigner(SERVER_PRIVATE_KEY);
   const serverAddress = signer.address;
+  if (!serverAddress) {
+    throw new Error('Server address not found');
+  }
 
   return new Promise((resolve, reject) => {
     let authTimeout: NodeJS.Timeout;
@@ -251,8 +322,8 @@ export { authenticateWithBroker };
 export async function sendToBroker(request: any): Promise<any> {
   // Check authentication first before creating the Promise
   if (!isAuthenticated &&
-      !(request.req && request.req[1] === 'auth_request') &&
-      !(request.req && request.req[1] === 'auth_verify')) {
+    !(request.req && request.req[1] === 'auth_request') &&
+    !(request.req && request.req[1] === 'auth_verify')) {
     try {
       console.log('Not authenticated with broker, authenticating first...');
       await authenticateWithBroker();
@@ -269,7 +340,7 @@ export async function sendToBroker(request: any): Promise<any> {
     }
 
     // Prepare the request using a Promise chain
-    const prepareRequest = async (): Promise<{req: any, requestId: string | number}> => {
+    const prepareRequest = async (): Promise<{ req: any, requestId: string | number }> => {
       let requestId: string | number;
       let preparedRequest = request;
 
@@ -325,9 +396,8 @@ export async function sendToBroker(request: any): Promise<any> {
 
 // Creates an application session in the broker
 export async function createAppSession(
-  channelId: string,
-  participants: string[],
-  allocations: bigint[]
+  participantA: Hex,
+  participantB: Hex,
 ): Promise<string> {
   // Ensure we're authenticated before creating an app session
   if (!isAuthenticated) {
@@ -339,41 +409,73 @@ export async function createAppSession(
     }
   }
 
-  // Prepare the request object
-  const requestId = Date.now();
-  const method = "create_app_session";
-  const intents = [Number(allocations[0]), Number(allocations[1]), 0];
-  const reqParams = [{
-    definition: {
-      protocol: "nitroliterpc",
-      participants: participants.map(p => p as Hex),
-      weights: [0, 0, 100], // Alice: 0, Bob: 0, Server: 100
-      quorum: 100,
-      challenge: 0,
-      nonce: Date.now(),
-    },
-    token: CONTRACT_ADDRESSES.tokenAddress as Hex,
-    allocations: intents
-  }];
-  const timestamp = Math.floor(Date.now() / 1000);
-  console.log({ requestId, method, reqParams: reqParams[0], timestamp });
+  // Get the server's wallet address
+  const signer = createEthersSigner(SERVER_PRIVATE_KEY);
+  if (!signer.address) {
+    throw new Error('Server wallet address not found');
+  }
 
-  // Create request data - we'll sign it in sendToBroker
-  const request = {
-    req: [requestId, method, reqParams, timestamp],
-    sig: [""], // Will be filled in by sendToBroker
-    int: intents
+  // Prepare the request object
+
+  // const requestId = Date.now();
+  // const method = "create_app_session";
+  // const intents = [Number(allocations[0]), Number(allocations[1]), 0];
+  // const reqParams = [{
+  //   definition: {
+  //     protocol: "nitroliterpc",
+  //     participants: participants.map(p => p as Hex),
+  //     weights: [0, 0, 100], // Alice: 0, Bob: 0, Server: 100
+  //     quorum: 100,
+  //     challenge: 0,
+  //     nonce: Date.now(),
+  //   },
+  //   token: CONTRACT_ADDRESSES.tokenAddress as Hex,
+  //   allocations: intents
+  // }];
+  // const timestamp = Math.floor(Date.now() / 1000);
+  // console.log({ requestId, method, reqParams: reqParams[0], timestamp, participants: reqParams[0].definition.participants });
+  const participants = [
+    participantA,
+    participantB,
+    signer.address as Hex,
+  ];
+  const initialIntent = [0, 0, 0];
+  console.log('Participants', participants);
+  console.log('Initial intent', initialIntent);
+
+  const appDefinition: AppDefinition = {
+    protocol: DEFAULT_PROTOCOL,
+    participants,
+    weights: DEFAULT_WEIGHTS,
+    quorum: DEFAULT_QUORUM,
+    challenge: 1,
+    nonce: Date.now(),
   };
 
-  try {
-    const result = await sendToBroker(request);
-    const appId = result.app_id || (typeof result[0] === 'object' ? result[0].app_id : null);
-    console.log(`Created app session ${appId} for channel ${channelId}`);
-    return appId;
-  } catch (error) {
-    console.error(`Error creating app session for channel ${channelId}:`, error);
-    throw error;
-  }
+  const signedMessage = await createAppSessionMessage(
+    signer.sign,
+    [{
+      definition: appDefinition,
+      token: CONTRACT_ADDRESSES.tokenAddress as Hex,
+      allocations: initialIntent,
+    }],
+    initialIntent,
+  );
+  const parsed = JSON.parse(signedMessage)
+  parsed.sig = ["zxcvzxcvzxcv"];
+  console.log('Signed message', parsed);
+
+  // Create request data - we'll sign it in sendToBroker
+  // const request = {
+  //   req: [requestId, method, reqParams, timestamp],
+  //   sig: [""], // Will be filled in by sendToBroker
+  //   int: intents
+  // };
+
+  const result = await sendToBroker(JSON.stringify(parsed));
+  const appId = result.app_id || (typeof result[0] === 'object' ? result[0].app_id : null);
+  console.log(`Created app session ${appId}`);
+  return appId;
 }
 
 // Closes an application session in the broker
@@ -421,15 +523,11 @@ export async function closeAppSession(
 }
 
 // Helper function to sign state data with the server's private key
-export async function signStateData(stateData: string): Promise<{signature: string, address: string}> {
+export async function signStateData(stateData: string): Promise<{ signature: string, address: Hex }> {
   const signer = createEthersSigner(SERVER_PRIVATE_KEY);
-
-  // Use our properly typed signer
-  const signature = await signer.sign(stateData as unknown as RequestData);
-
   return {
-    signature,
-    address: signer.address
+    signature: await signer.sign(stateData as unknown as RequestData),
+    address: signer.address as Hex
   };
 }
 
@@ -452,33 +550,29 @@ export interface WalletSigner {
  * @returns A WalletSigner object that can sign messages
  * @throws Error if signer creation fails
  */
-export const createEthersSigner = (privateKey: string): WalletSigner => {
-    try {
-        // Create ethers wallet from private key
-        const wallet = new ethers.Wallet(privateKey);
-
-        return {
-            publicKey: wallet.publicKey,
-            address: wallet.address as Hex,
-            sign: async (payload: RequestData | ResponsePayload): Promise<Hex> => {
-                try {
-                    const messageBytes = ethers.utils.arrayify(ethers.utils.id(JSON.stringify(payload)));
-
-                    const flatSignature = await wallet._signingKey().signDigest(messageBytes);
-
-                    const signature = ethers.utils.joinSignature(flatSignature);
-
-                    return signature as Hex;
-                } catch (error) {
-                    console.error('Error signing message:', error);
-                    throw error;
-                }
-            },
-        };
-    } catch (error) {
-        console.error('Error creating ethers signer:', error);
-        throw error;
-    }
+export function createEthersSigner(privateKey: string): WalletSigner {
+  try {
+    // Create ethers wallet from private key
+    const wallet = new ethers.Wallet(privateKey);
+    return {
+      publicKey: wallet.publicKey,
+      address: wallet.address as Hex,
+      sign: async (payload: RequestData | ResponsePayload): Promise<Hex> => {
+        try {
+          const messageBytes = ethers.utils.arrayify(ethers.utils.id(JSON.stringify(payload)));
+          const flatSignature = wallet._signingKey().signDigest(messageBytes);
+          const signature = ethers.utils.joinSignature(flatSignature);
+          return signature as Hex;
+        } catch (error) {
+          console.error('Error signing message:', error);
+          throw error;
+        }
+      },
+    };
+  } catch (error) {
+    console.error('Error creating ethers signer:', error);
+    throw error;
+  }
 };
 
 // Helper function to sign RPC request data for the broker

@@ -485,57 +485,6 @@ class ClearNetService {
         }
     }
 
-    async createAppSession(participants: string[], initialGameState: string) {
-        if (!this.client || !this.isConnected || !this.activeChannel || !this.wsConnection) {
-            console.error("ClearNet client not initialized, no active channel, or WebSocket not connected");
-            return null;
-        }
-
-        try {
-            // Create an app session on the broker with the server account
-            // This is typically done by the server, but we include this code for reference
-            // to show the expected message format
-
-            // Get the app definition parameters
-            const appId = `snake_game_${Date.now()}`;
-            const tokenAddress = this.client.config.addresses.tokenAddress;
-
-            // Format the message for create_app_session
-            // In a real implementation, this would be signed by the server
-            const createAppSessionMessage = {
-                jsonrpc: "2.0",
-                method: "create_app_session",
-                params: {
-                    channel_id: this.activeChannel.channelId,
-                    app_definition: {
-                        protocol: "nitroliterpc",
-                        participants: participants, // e.g. [alice_address, bob_address, server_address]
-                        weights: [0, 0, 100], // Alice: 0, Bob: 0, Server: 100
-                        quorum: 100, // Server has full decision power
-                        challenge: 0,
-                        nonce: Date.now(),
-                    },
-                    token: tokenAddress,
-                    allocations: [100, 0], // Initial allocations - all funds start with Alice (player A)
-                    app_id: appId,
-                    initial_state: initialGameState,
-                },
-                id: `create-app-${Date.now()}`,
-            };
-
-            // In a real implementation, the server would sign and send this message
-            // Here we return the app session info that the server would create
-            return {
-                appId: appId,
-                channelId: this.activeChannel.channelId,
-                initialState: initialGameState,
-            };
-        } catch (error) {
-            console.error("Failed to create app session:", error);
-            return null;
-        }
-    }
-
     // This method notifies the game server about a player joining a room
     async joinGameRoom(roomId: string, nickname: string) {
         if (!this.client || !this.isConnected || !this.activeChannel) {

@@ -11,8 +11,9 @@ import {
   clearNetRPC,
   initializeBroadcastFunction
 } from './gameService';
-import { createAppSession } from './brokerService';
+import { createAppSession  } from './brokerService';
 import { SERVER_PRIVATE_KEY } from '../config';
+import { Hex } from 'viem';
 
 // Global reference to the WebSocket server
 let webSocketServer: WebSocketServer;
@@ -183,35 +184,19 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
   }));
 
   console.log(`Player joined room: ${roomId}, Player: ${player.id}, Address: ${walletAddress}`);
+  console.log('Room data:', room);
 
   // If we have 2 players and a channel, create the app session
   if (room.players.size === 2 && room.channelIds.size > 0) {
     try {
-      // Get the channel ID
-      const channelId = Array.from(room.channelIds)[0];
-
-      // Get player addresses
-      const playerAddresses = Array.from(room.playerAddresses.values());
-
-      // Get player allocations
-      const playerAllocations = Array.from(room.playerAllocations.values());
-
-      // Get the server's wallet address
-      const wallet = new ethers.Wallet(SERVER_PRIVATE_KEY);
-
-      // Create the participants array with server as third participant
-      const participants = [...playerAddresses, wallet.address];
+      const players = Array.from(room.players.values());
 
       // Create the app session
       const createdAppId = await createAppSession(
-        channelId,
-        participants,
-        playerAllocations
+        room.playerAddresses.get(players[0].id) as Hex,
+        room.playerAddresses.get(players[1].id) as Hex
       );
-
-      // Store the app ID in the room
       room.appId = createdAppId;
-
       console.log(`Created app session ${createdAppId} for room ${roomId}`);
 
       // Start the game

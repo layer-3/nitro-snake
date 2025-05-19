@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import clearNetService from '../services/ClearNetService';
 import { ethers } from 'ethers';
 import { CONTRACT_ADDRESSES } from '../config';
+import { waitForTransaction } from '@erc7824/nitrolite';
 
 // ERC20 ABI for decimals
 const ERC20_ABI = [
@@ -222,25 +223,41 @@ async function createChannel() {
 
         try {
             console.log("Start Create Channel");
-            const nitroChannelId = localStorage.getItem("nitro_channel_id");
-            let createChannelResponse;
+            let nitroChannelId = localStorage.getItem("nitro_channel_id");
+
+            if (!nitroChannelId) {
+                // Fetch available channels
+                const channels = await clearNetService.getAccountChannels();
+                console.log("Channels:", channels);
+                if (channels.length > 0) {
+                    nitroChannelId = channels[0];
+                    localStorage.setItem("nitro_channel_id", nitroChannelId);
+                    console.log('Fetched channel id from RPC:', nitroChannelId, channels);
+                }
+            }
             if (!nitroChannelId) {
                 // Create the channel using the proper Nitrolite client
                 const depositAmount = depositAmountWei.value;
                 console.log("Start Deposit", depositAmount);
                 const depositResponse = await clearNetService.client.deposit(depositAmount);
                 console.log("Deposit response:", depositResponse);
-                await clearNetService.client.publicClient.waitForTransactionReceipt({ hash: depositResponse });
-                createChannelResponse = await clearNetService.client.createChannel({
+                await waitForTransaction(clearNetService.client.publicClient, depositResponse);
+                const createChannelResponse = await clearNetService.client.createChannel({
                     initialAllocationAmounts: [depositAmount, BigInt(0)],
                     stateData: "0x",
                 });
                 console.log("Create channel response:", createChannelResponse);
+                if (createChannelResponse && createChannelResponse.channelId) {
+                    nitroChannelId = createChannelResponse.channelId;
+                }
             }
-            if (createChannelResponse && createChannelResponse.channelId) {
-                localStorage.setItem("nitro_channel_id", createChannelResponse.channelId);
-                channelData.value = createChannelResponse;
-                emit('channel-created', createChannelResponse);
+
+            // If we have a channel id, we can create the channel
+            if (nitroChannelId) {
+                localStorage.setItem("nitro_channel_id", nitroChannelId);
+                const newChannelData = { channelId: nitroChannelId };
+                channelData.value = newChannelData;
+                emit('channel-created', newChannelData);
             } else {
                 errorMessage.value = 'Failed to create channel';
                 emit('error', errorMessage.value);
