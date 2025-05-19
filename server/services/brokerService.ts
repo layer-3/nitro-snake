@@ -456,7 +456,7 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
 }
 
 // Closes an application session in the broker
-export async function closeAppSession(appId: Hex, allocations: number[]): Promise<void> {
+export async function closeAppSession(appId: Hex): Promise<void> {
     // Ensure we're authenticated before closing an app session
     if (!isAuthenticated) {
         try {
@@ -474,13 +474,14 @@ export async function closeAppSession(appId: Hex, allocations: number[]): Promis
     }
 
     // Prepare the request object
+    const allocations = [0,0,0];
     const request = await createCloseAppSessionMessage(
         signer.sign,
         [{
             app_id: appId,
-            allocations: allocations,
+            allocations
         }],
-        allocations,
+        allocations
     );
     await sendToBroker(request);
 }

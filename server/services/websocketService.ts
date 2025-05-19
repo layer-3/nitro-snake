@@ -10,7 +10,7 @@ import {
   clearNetRPC,
   initializeBroadcastFunction
 } from './gameService';
-import { createAppSession  } from './brokerService';
+import { createAppSession, closeAppSession } from './brokerService';
 import { Hex } from 'viem';
 
 // Global reference to the WebSocket server
@@ -332,7 +332,7 @@ async function handlePlayAgain(ws: SnakeWebSocket, data: any): Promise<void> {
 
 // Handle finalize game message
 async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> {
-  const roomId = ws.roomId;
+  const { roomId } = data;
   if (!roomId) return;
 
   const room = getRoom(roomId);
@@ -345,6 +345,46 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
   }
 
   room.isGameOver = true;
+
+  // Create final state with game results
+  const finalState = {
+    roomId,
+    stateVersion: room.stateVersion,
+    players: Array.from(room.players.values()).map(p => ({
+      id: p.id,
+      nickname: p.nickname,
+      score: p.score,
+      isDead: p.isDead || false
+    })),
+    isGameOver: true,
+    finalizedAt: Date.now(),
+    reason: 'game_ended'
+  };
+
+  // Finalize all channels associated with this room
+  if (room.channelIds.size > 0) {
+    const finalizePromises = Array.from(room.channelIds).map(id =>
+      clearNetRPC.finalizeChannel(id, finalState)
+    );
+
+    try {
+      await Promise.all(finalizePromises);
+      console.log(`[websocketService] Finalized all channels for room ${roomId}`);
+    } catch (error) {
+      console.error(`[websocketService] Error finalizing channels for room ${roomId}:`, error);
+    }
+  }
+
+  // Close the app session
+  if (room.appId) {
+    try {
+      console.log(`[websocketService] Closing app session for room ${room.appId}`);
+      await closeAppSession(room.appId);
+      console.log(`[websocketService] App session closed successfully`);
+    } catch (error) {
+      console.error(`[websocketService] Error closing app session:`, error);
+    }
+  }
 
   // Create and broadcast final game state
   const gameState = {
@@ -368,6 +408,12 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
 
   // Broadcast to all players in the room
   broadcastGameState(roomId, gameState);
+
+  // Clean up the room after a short delay to allow clients to receive the final state
+  setTimeout(() => {
+    removeRoom(roomId);
+    console.log(`[websocketService] Room deleted: ${roomId}`);
+  }, 2000);
 }
 
 // Handle client disconnect
