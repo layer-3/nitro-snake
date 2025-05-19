@@ -1,3 +1,5 @@
+import { Player } from "./interfaces";
+
 export interface Room {
   id: string;
   players: Map<string, Player>;
@@ -6,7 +8,6 @@ export interface Room {
   gridSize: { width: number; height: number };
   channelIds: Set<string>;
   playerAddresses: Map<string, string>;
-  playerAllocations: Map<string, number>;
   currentState: any;
   stateVersion: number;
   createdAt: number;

@@ -1,6 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
-import { ethers } from 'ethers';
 import { Room, SnakeWebSocket } from '../interfaces';
 import { getRoom, addRoom, removeRoom } from './stateService';
 import {
@@ -12,7 +11,6 @@ import {
   initializeBroadcastFunction
 } from './gameService';
 import { createAppSession  } from './brokerService';
-import { SERVER_PRIVATE_KEY } from '../config';
 import { Hex } from 'viem';
 
 // Global reference to the WebSocket server
@@ -95,7 +93,7 @@ async function handleWebSocketMessage(ws: SnakeWebSocket, data: any): Promise<vo
 async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
   console.log('[websocketService] Creating room with data:', data);
   const roomId = generateRoomId();
-  const { nickname, channelId, walletAddress, allocation } = data;
+  const { nickname, channelId, walletAddress } = data;
   const gridSize = { width: 40, height: 30 };
 
   // Create player
@@ -110,7 +108,6 @@ async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
     gridSize,
     channelIds: new Set(),
     playerAddresses: new Map([[player.id, walletAddress]]),
-    playerAllocations: new Map([[player.id, BigInt(allocation)]]),
     currentState: null,
     stateVersion: 0,
     createdAt: Date.now()
@@ -140,7 +137,7 @@ async function handleCreateRoom(ws: SnakeWebSocket, data: any): Promise<void> {
 // Handle join room message
 async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
   console.log('[websocketService] Joining room with data:', data);
-  const { roomId, nickname, channelId, walletAddress, allocation } = data;
+  const { roomId, nickname, channelId, walletAddress } = data;
   const room = getRoom(roomId);
   console.log('[websocketService] Room lookup result:', room ? 'found' : 'not found');
 
@@ -166,7 +163,6 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
   // Add player to room
   room.players.set(player.id, player);
   room.playerAddresses.set(player.id, walletAddress);
-  room.playerAllocations.set(player.id, BigInt(allocation));
 
   ws.roomId = roomId;
 

@@ -56,7 +56,6 @@ interface ChannelResponse {
     };
     txHash?: string;
 }
-type ChannelData = ChannelResponse;
 
 // Convert ETH to Wei using contract decimals
 const depositAmountWei = computed(() => {

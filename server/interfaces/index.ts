@@ -26,7 +26,6 @@ export interface Room {
   channelIds: Set<string>;
   appId?: string;
   playerAddresses: Map<string, string>; // Maps playerId to their ethereum address
-  playerAllocations: Map<string, bigint>; // Maps playerId to their allocation
   currentState: any;
   stateVersion: number;
   createdAt: number; // Timestamp when the room was created

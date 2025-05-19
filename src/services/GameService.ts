@@ -215,7 +215,7 @@ class GameService {
     }
   }
 
-  async createRoom(nickname: string, channelId: string, walletAddress: string, allocation: bigint) {
+  async createRoom(nickname: string, channelId: string, walletAddress: string) {
     try {
       await this.ensureConnected();
 
@@ -228,7 +228,6 @@ class GameService {
         nickname,
         channelId,
         walletAddress,
-        allocation: allocation.toString()
       }));
     } catch (error) {
       console.error('Error creating room:', error);
@@ -237,7 +236,7 @@ class GameService {
     }
   }
 
-  async joinRoom(roomId: string, nickname: string, channelId: string, walletAddress: string, allocation: bigint) {
+  async joinRoom(roomId: string, nickname: string, channelId: string, walletAddress: string) {
     try {
       await this.ensureConnected();
 
@@ -251,7 +250,6 @@ class GameService {
         nickname,
         channelId,
         walletAddress,
-        allocation: allocation.toString()
       }));
     } catch (error) {
       console.error('Error joining room:', error);

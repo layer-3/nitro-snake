@@ -249,14 +249,16 @@ export function handleBrokerMessage(message: any): void {
         // Log the raw message for debugging
         console.log("Received message from broker:", message);
 
+        const requestId = message.res[0];
+        const method = message.res[1];
+        const payload = message.res[2];
         // Handle RPC format (new format with 'res' array)
         if (message.res && Array.isArray(message.res)) {
             // Check if it's an error message
-            if (message.res[1] === "error") {
-                console.log("Received error from broker:", message.res[2]);
+            if (method === "error") {
+                console.log("Received error from broker:", payload);
 
                 // Check if it's a response to a pending request
-                const requestId = message.res[0];
                 if (typeof requestId === "string" || typeof requestId === "number") {
                     const pendingRequest = getPendingRequest(requestId.toString());
                     if (pendingRequest) {
@@ -264,15 +266,19 @@ export function handleBrokerMessage(message: any): void {
                         clearTimeout(timeout);
                         clearPendingRequest(requestId.toString());
 
-                        const errorMessage = message.res[2] && message.res[2][0]?.error ? message.res[2][0].error : "Unknown error";
+                        const errorMessage = payload && payload[0]?.error ? payload[0].error : "Unknown error";
                         reject(new Error(errorMessage));
                     }
                 }
                 return;
             }
+            else if (method === "get_channels") {
+                if (payload.length === 0) {
+                    createBrokerChannel(client);
+                }
+            }
 
             // Handle successful response to a pending request
-            const requestId = message.res[0];
             if (typeof requestId === "string" || typeof requestId === "number") {
                 const pendingRequest = getPendingRequest(requestId.toString());
                 if (pendingRequest) {
@@ -281,7 +287,7 @@ export function handleBrokerMessage(message: any): void {
                     clearPendingRequest(requestId.toString());
 
                     // For successful responses, return the result data (typically in res[2])
-                    const resultData = message.res[2] || [];
+                    const resultData = payload || [];
                     resolve(resultData.length === 1 ? resultData[0] : resultData);
                     return;
                 }

@@ -1,6 +1,5 @@
-import { WebSocket } from 'ws';
 import { randomBytes } from 'crypto';
-import { Player, Room } from '../interfaces';
+import { Player } from '../interfaces';
 import { getRoom } from './stateService';
 import { closeAppSession } from './brokerService';
 
@@ -14,18 +13,18 @@ export function generateRoomId(): string {
 
 // Generate a random food position
 export function generateFood(
-  gridSize: { width: number; height: number }, 
+  gridSize: { width: number; height: number },
   players: Map<string, Player>
 ): { x: number; y: number } {
-  let x: number, y: number;
+  let x: number = 0, y: number = 0;
   let validPosition = false;
-  
+
   while (!validPosition) {
     x = Math.floor(Math.random() * gridSize.width);
     y = Math.floor(Math.random() * gridSize.height);
-    
+
     validPosition = true;
-    
+
     for (const player of players.values()) {
       for (const segment of player.segments) {
         if (segment.x === x && segment.y === y) {
@@ -36,19 +35,19 @@ export function generateFood(
       if (!validPosition) break;
     }
   }
-  
+
   return { x, y };
 }
 
 // Initialize a new player
 export function initializePlayer(
-  id: string, 
-  nickname: string, 
+  id: string,
+  nickname: string,
   gridSize: { width: number; height: number }
 ): Player {
   const x = Math.floor(Math.random() * (gridSize.width - 10)) + 5;
   const y = Math.floor(Math.random() * (gridSize.height - 10)) + 5;
-  
+
   return {
     id,
     nickname,
@@ -70,23 +69,23 @@ export function initializeBroadcastFunction(
 export async function gameTick(roomId: string): Promise<void> {
   const room = getRoom(roomId);
   if (!room) return;
-  
+
   // If game is over, don't process any more ticks
   if (room.isGameOver) {
     return;
   }
-  
+
   const { players, food, gridSize } = room;
   const playersArray = Array.from(players.values());
-  
+
   // Move each player
   for (const player of playersArray) {
     // Skip if player is dead
     if (player.isDead) continue;
-    
+
     // Get current head position
     const head = { ...player.position };
-    
+
     // Move head based on direction
     switch (player.direction) {
       case 'up':
@@ -102,10 +101,10 @@ export async function gameTick(roomId: string): Promise<void> {
         head.x = (head.x + 1) % gridSize.width;
         break;
     }
-    
+
     // Update player position
     player.position = head;
-    
+
     // Check if player ate food
     if (head.x === food.x && head.y === food.y) {
       player.score += 10;
@@ -116,18 +115,18 @@ export async function gameTick(roomId: string): Promise<void> {
       // Remove tail if didn't eat food
       player.segments.pop();
     }
-    
+
     // Add new head to segments
     player.segments.unshift({ ...head });
-    
+
     // Check for collisions with other players
     let isCollision = false;
     for (const otherPlayer of playersArray) {
       // Skip first segment of the current player
-      const segments = otherPlayer === player ? 
-        otherPlayer.segments.slice(1) : 
+      const segments = otherPlayer === player ?
+        otherPlayer.segments.slice(1) :
         otherPlayer.segments;
-      
+
       for (const segment of segments) {
         if (head.x === segment.x && head.y === segment.y) {
           // Collision detected - mark player as dead
@@ -139,13 +138,13 @@ export async function gameTick(roomId: string): Promise<void> {
       if (isCollision) break;
     }
   }
-  
+
   // Check if game is over (only one player left alive or all players dead)
   if (playersArray.length > 1) {
     const alivePlayers = playersArray.filter(p => !p.isDead);
     if (alivePlayers.length <= 1) {
       room.isGameOver = true;
-      
+
       // If there's an interval, clear it to stop the game
       if (room.gameInterval) {
         clearInterval(room.gameInterval);
@@ -153,7 +152,7 @@ export async function gameTick(roomId: string): Promise<void> {
       }
     }
   }
-  
+
   // Broadcast game state to all players in the room
   await broadcastGameState(roomId);
 }
@@ -162,7 +161,7 @@ export async function gameTick(roomId: string): Promise<void> {
 export async function broadcastGameState(roomId: string): Promise<void> {
   const room = getRoom(roomId);
   if (!room) return;
-  
+
   const gameState = {
     type: 'gameState',
     players: Array.from(room.players.values()).map(p => ({
@@ -178,34 +177,34 @@ export async function broadcastGameState(roomId: string): Promise<void> {
     stateVersion: ++room.stateVersion,
     timestamp: Date.now()
   };
-  
+
   // Store the current state in the room
   room.currentState = gameState;
-  
+
   // If game is over, close the app session on the broker
   if (gameState.isGameOver && room.appId && room.channelIds.size > 0) {
     // Get the final allocations based on scores
     const players = Array.from(room.players.values());
-    
+
     // Find the winner (player with highest score)
-    const winner = players.reduce((highest, player) => 
+    const winner = players.reduce((highest, player) =>
       !highest || player.score > highest.score ? player : highest
     , players[0]);
-    
+
     // Get the channel ID
     const channelId = Array.from(room.channelIds)[0];
-    
+
     // Determine allocations
     // Give all the money to the player with the highest score
     // We could also distribute proportionally based on scores
     const allocations = [0, 0];
-    
+
     // Lookup player address using playerId
     const winnerIndex = players.findIndex(p => p.id === winner.id);
     if (winnerIndex !== -1) {
       allocations[winnerIndex] = 100; // Give 100% to the winner
     }
-    
+
     try {
       // Close the app session with the final state and allocations
       await closeAppSession(
@@ -224,7 +223,7 @@ export async function broadcastGameState(roomId: string): Promise<void> {
       console.error(`Error closing app session for room ${roomId}:`, error);
     }
   }
-  
+
   // Broadcast to all players in the room if the broadcast function is initialized
   if (broadcastGameStateToClients) {
     broadcastGameStateToClients(roomId, gameState);

@@ -26,7 +26,6 @@ const walletAddress = ref('');
 const channelInfo = ref<any>(null);
 
 // Subscribe to GameService state
-const isConnected = gameService.getIsConnected();
 const gameError = gameService.getErrorMessage();
 
 // Watch for error messages from GameService
@@ -47,7 +46,7 @@ const updateRoomId = (e: Event) => {
 const createRoom = () => {
   if (isChannelCreated.value) {
     isCreatingRoom.value = true;
-    gameService.createRoom(props.nickname, channelInfo.value.channelId, walletAddress.value, channelInfo.value.initialState.allocations[0].amount);
+    gameService.createRoom(props.nickname, channelInfo.value.channelId, walletAddress.value);
     emit('create-room');
   } else {
     console.log("createRoom", isChannelCreated.value);
@@ -58,7 +57,7 @@ const createRoom = () => {
 const joinRoom = () => {
   if (isChannelCreated.value) {
     isJoiningRoom.value = true;
-    gameService.joinRoom(props.roomId, props.nickname, channelInfo.value.channelId, walletAddress.value, channelInfo.value.initialState.allocations[0].amount);
+    gameService.joinRoom(props.roomId, props.nickname, channelInfo.value.channelId, walletAddress.value);
     emit('join-room');
   } else {
     emit('update:errorMessage', 'Please join a channel first');
