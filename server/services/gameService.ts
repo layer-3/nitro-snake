@@ -130,6 +130,8 @@ export async function gameTick(roomId: string): Promise<void> {
       for (const segment of segments) {
         if (head.x === segment.x && head.y === segment.y) {
           // Collision detected - mark player as dead
+          console.log(`[gameTick] Collision detected for player ${player.id} at position (${head.x}, ${head.y})`);
+          console.log(`[gameTick] Collided with segment from player ${otherPlayer.id} at (${segment.x}, ${segment.y})`);
           isCollision = true;
           player.isDead = true;
           break;
@@ -142,11 +144,16 @@ export async function gameTick(roomId: string): Promise<void> {
   // Check if game is over (only one player left alive or all players dead)
   if (playersArray.length > 1) {
     const alivePlayers = playersArray.filter(p => !p.isDead);
+    console.log(`[gameTick] Alive players count: ${alivePlayers.length}`);
+    console.log(`[gameTick] Player states:`, playersArray.map(p => ({ id: p.id, isDead: p.isDead })));
+
     if (alivePlayers.length <= 1) {
+      console.log(`[gameTick] Game over condition met at ${Date.now()}`);
       room.isGameOver = true;
 
       // If there's an interval, clear it to stop the game
       if (room.gameInterval) {
+        console.log(`[gameTick] Clearing game interval`);
         clearInterval(room.gameInterval);
         room.gameInterval = null;
       }
@@ -154,6 +161,7 @@ export async function gameTick(roomId: string): Promise<void> {
   }
 
   // Broadcast game state to all players in the room
+  console.log(`[gameTick] Broadcasting game state at ${Date.now()}`);
   await broadcastGameState(roomId);
 }
 
@@ -178,11 +186,16 @@ export async function broadcastGameState(roomId: string): Promise<void> {
     timestamp: Date.now()
   };
 
+  console.log(`[broadcastGameState] Preparing to broadcast state version ${gameState.stateVersion} at ${Date.now()}`);
+  console.log(`[broadcastGameState] Game over status: ${gameState.isGameOver}`);
+  console.log(`[broadcastGameState] Player states:`, gameState.players.map(p => ({ id: p.id, isDead: p.isDead })));
+
   // Store the current state in the room
   room.currentState = gameState;
 
   // If game is over, close the app session on the broker
   if (gameState.isGameOver && room.appId && room.channelIds.size > 0) {
+    console.log(`[broadcastGameState] Game is over, preparing to close app session`);
     // Get the final allocations based on scores
     const players = Array.from(room.players.values());
 
@@ -190,6 +203,8 @@ export async function broadcastGameState(roomId: string): Promise<void> {
     const winner = players.reduce((highest, player) =>
       !highest || player.score > highest.score ? player : highest
     , players[0]);
+
+    console.log(`[broadcastGameState] Winner determined: ${winner.id} with score ${winner.score}`);
 
     // Determine allocations
     // Give all the money to the player with the highest score
@@ -204,16 +219,21 @@ export async function broadcastGameState(roomId: string): Promise<void> {
 
     try {
       // Close the app session with the final allocations
+      console.log(`[broadcastGameState] Closing app session with allocations:`, allocations);
       await closeAppSession(room.appId, allocations);
-      console.log(`Closed app session for room ${roomId} with winner ${winner.id}`);
+      console.log(`[broadcastGameState] App session closed successfully`);
     } catch (error) {
-      console.error(`Error closing app session for room ${roomId}:`, error);
+      console.error(`[broadcastGameState] Error closing app session:`, error);
     }
   }
 
   // Broadcast to all players in the room if the broadcast function is initialized
   if (broadcastGameStateToClients) {
+    console.log(`[broadcastGameState] Broadcasting to clients at ${Date.now()}`);
     broadcastGameStateToClients(roomId, gameState);
+    console.log(`[broadcastGameState] Broadcast complete at ${Date.now()}`);
+  } else {
+    console.warn(`[broadcastGameState] No broadcast function available`);
   }
 }
 

@@ -51,12 +51,20 @@ export function getWebSocketServer(): WebSocketServer {
 
 // Broadcast game state to all clients in a room
 export function broadcastGameState(roomId: string, gameState: any): void {
+  console.log(`[websocketService] Broadcasting game state to room ${roomId} at ${Date.now()}`);
+  console.log(`[websocketService] Game state version: ${gameState.stateVersion}`);
+  console.log(`[websocketService] Game over status: ${gameState.isGameOver}`);
+
+  let clientCount = 0;
   webSocketServer.clients.forEach(client => {
     const snakeClient = client as SnakeWebSocket;
     if (snakeClient.roomId === roomId && snakeClient.readyState === WebSocket.OPEN) {
+      clientCount++;
+      console.log(`[websocketService] Sending to client ${snakeClient.playerId} at ${Date.now()}`);
       snakeClient.send(JSON.stringify(gameState));
     }
   });
+  console.log(`[websocketService] Broadcast complete. Sent to ${clientCount} clients at ${Date.now()}`);
 }
 
 // Handle WebSocket message
