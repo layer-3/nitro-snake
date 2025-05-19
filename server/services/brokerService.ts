@@ -27,9 +27,9 @@ const DEFAULT_QUORUM: number = 100; // server alone decides the outcome
 
 // Flag to indicate if we've authenticated with the broker
 let isAuthenticated = false;
-let client: NitroliteClient = await createClient();
+let client: NitroliteClient = createClient();
 
-async function createClient(): Promise<NitroliteClient> {
+function createClient(): NitroliteClient {
     // Create the wallet client using the ethereum provider
 
     const wallet = privateKeyToAccount(WALLET_PRIVATE_KEY);
@@ -48,6 +48,7 @@ async function createClient(): Promise<NitroliteClient> {
     // Create a dedicated client for signing state updates
     const stateWallet = new ethers.Wallet(WALLET_PRIVATE_KEY);
     const stateWalletClient = {
+        ...stateWallet,
         account: {
             address: address,
         },
@@ -68,26 +69,31 @@ async function createClient(): Promise<NitroliteClient> {
         challengeDuration: BigInt(86400), // 1 day in seconds
     };
     const client = new NitroliteClient(config);
-    await createBrokerChannel(client);
 
     return client;
 }
 
 async function createBrokerChannel(client: NitroliteClient): Promise<void> {
-    // Verify if the channel already exists
-    const channels = await client.getAccountChannels(); // on chain, get_channels from the broker
-    console.log("Channels", channels);
-    if (channels.length > 0) {
-        console.log("Channel already exists, skipping creation");
-        return;
-    }
-
     // Create a channel with the broker
     const createChannelResponse = await client.createChannel({
         initialAllocationAmounts: [0n, 0n],
         stateData: "0x",
     });
     console.log("Created channel", createChannelResponse);
+
+    // Check if broker joined the channel
+    const brokerWs = getBrokerWebSocket();
+    const active = brokerWs && (brokerWs.readyState === WebSocket.OPEN || brokerWs.readyState === WebSocket.CONNECTING);
+    if (!active) { return; }
+    getChannels(brokerWs);
+}
+
+async function getChannels(brokerWs: WebSocket): Promise<void> {
+    const signer = createEthersSigner(WALLET_PRIVATE_KEY);
+    const params = [{ participant: signer.address }];
+    const request = NitroliteRPC.createRequest(10, "get_channels", params);
+    const getChannelMessage = await NitroliteRPC.signRequestMessage(request, signer.sign);
+    brokerWs.send(JSON.stringify(getChannelMessage));
 }
 
 // Connects to the Nitrolite broker
@@ -184,11 +190,8 @@ async function authenticateWithBroker(): Promise<void> {
                         console.log("Sending auth_verify:", authVerify);
 
                         brokerWs.send(authVerify);
-                        const paramsForChannels = [{ participant: signer.address }];
-                        const getChannelsMessage = NitroliteRPC.createRequest(10, "get_channels", paramsForChannels);
-                        const getChannelMessage = await NitroliteRPC.signRequestMessage(getChannelsMessage, signer.sign);
                         brokerWs.send(getBalances);
-                        brokerWs.send(JSON.stringify(getChannelMessage));
+                        await getChannels(brokerWs);
                     } catch (error) {
                         console.error("Error creating auth verify message:", error);
                         cleanup();
@@ -247,7 +250,7 @@ async function authenticateWithBroker(): Promise<void> {
 export function handleBrokerMessage(message: any): void {
     try {
         // Log the raw message for debugging
-        console.log("Received message from broker:", message);
+        console.log("Received message from broker:", JSON.stringify(message), "\n");
 
         const requestId = message.res[0];
         const method = message.res[1];
@@ -272,10 +275,8 @@ export function handleBrokerMessage(message: any): void {
                 }
                 return;
             }
-            else if (method === "get_channels") {
-                if (payload.length === 0) {
-                    createBrokerChannel(client);
-                }
+            else if (method === "get_channels" && payload.length === 0) {
+                createBrokerChannel(client);
             }
 
             // Handle successful response to a pending request
@@ -435,7 +436,7 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
     // const timestamp = Math.floor(Date.now() / 1000);
     // console.log({ requestId, method, reqParams: reqParams[0], timestamp, participants: reqParams[0].definition.participants });
     const participants = [participantA, participantB, signer.address as Hex];
-    const initialIntent = [BigInt(0), BigInt(0), BigInt(0)];
+    const initialIntent = [0, 0, 0];
     console.log("signer", signer);
     console.log("Participants", participants);
     console.log("Initial intent", initialIntent);
