@@ -168,8 +168,12 @@ export async function gameTick(roomId: string): Promise<void> {
 // Broadcast game state to all clients in a room
 export async function broadcastGameState(roomId: string): Promise<void> {
   const room = getRoom(roomId);
-  if (!room) return;
+  if (!room) {
+    console.warn(`[broadcastGameState] Room ${roomId} not found`);
+    return;
+  }
 
+  // Create game state
   const gameState = {
     type: 'gameState',
     players: Array.from(room.players.values()).map(p => ({
@@ -186,44 +190,29 @@ export async function broadcastGameState(roomId: string): Promise<void> {
     timestamp: Date.now()
   };
 
-  console.log(`[broadcastGameState] Preparing to broadcast state version ${gameState.stateVersion} at ${Date.now()}`);
-  console.log(`[broadcastGameState] Game over status: ${gameState.isGameOver}`);
-  console.log(`[broadcastGameState] Player states:`, gameState.players.map(p => ({ id: p.id, isDead: p.isDead })));
-
   // Store the current state in the room
   room.currentState = gameState;
 
   // If game is over, close the app session on the broker
-  if (gameState.isGameOver && room.appId && room.channelIds.size > 0) {
+  if (gameState.isGameOver && room.appId && room.channelIds.size > 0 && !room.isClosingAppSession) {
     console.log(`[broadcastGameState] Game is over, preparing to close app session`);
-    // Get the final allocations based on scores
-    const players = Array.from(room.players.values());
-
-    // Find the winner (player with highest score)
-    const winner = players.reduce((highest, player) =>
-      !highest || player.score > highest.score ? player : highest
-    , players[0]);
-
-    console.log(`[broadcastGameState] Winner determined: ${winner.id} with score ${winner.score}`);
-
-    // Determine allocations
-    // Give all the money to the player with the highest score
-    // We could also distribute proportionally based on scores
-    const allocations = [0, 0];
-
-    // Lookup player address using playerId
-    const winnerIndex = players.findIndex(p => p.id === winner.id);
-    if (winnerIndex !== -1) {
-      allocations[winnerIndex] = 100; // Give 100% to the winner
-    }
 
     try {
-      // Close the app session with the final allocations
-      console.log(`[broadcastGameState] Closing app session with allocations:`, allocations);
-      await closeAppSession(room.appId, allocations);
+      // Mark that we're closing the app session
+      room.isClosingAppSession = true;
+
+      // Close the app session
+      console.log(`[broadcastGameState] Closing app session`);
+      await closeAppSession(room.appId);
       console.log(`[broadcastGameState] App session closed successfully`);
+
+      // Clear the app ID after successful closure
+      room.appId = undefined;
     } catch (error) {
       console.error(`[broadcastGameState] Error closing app session:`, error);
+      // Don't clear the app ID on error - it might still be valid
+    } finally {
+      room.isClosingAppSession = false;
     }
   }
 
@@ -238,15 +227,18 @@ export async function broadcastGameState(roomId: string): Promise<void> {
 }
 
 // Mock ClearNet RPC for now
+// TODO: drop this
 export const clearNetRPC = {
   getChannelInfo: async (channelId: string) => {
     return {
       id: channelId,
       participants: [],
-      status: 'open'
+      status: 'open',
+      allocations: [100, 100] // Default allocations for testing
     };
   },
   finalizeChannel: async (channelId: string, finalState: any) => {
+    // TODO: Implement finalize channel
     console.log(`Mock finalizing channel ${channelId} with state:`, finalState);
     return true;
   }

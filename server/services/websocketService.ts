@@ -196,12 +196,22 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
       const players = Array.from(room.players.values());
 
       // Create the app session
+      console.log(`[websocketService] Creating app session for room ${roomId} with players:`, {
+        player1: { id: players[0].id, address: room.playerAddresses.get(players[0].id) },
+        player2: { id: players[1].id, address: room.playerAddresses.get(players[1].id) }
+      });
+
       const createdAppId = await createAppSession(
         room.playerAddresses.get(players[0].id) as Hex,
         room.playerAddresses.get(players[1].id) as Hex
       );
-      room.appId = createdAppId;
-      console.log(`Created app session ${createdAppId} for room ${roomId}`);
+
+      if (!createdAppId) {
+        throw new Error("Failed to create app session - no app ID returned");
+      }
+
+      room.appId = createdAppId as Hex;
+      console.log(`[websocketService] Created app session ${createdAppId} for room ${roomId}`);
 
       // Start the game
       room.gameInterval = setInterval(async () => {
@@ -231,11 +241,22 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
       // Broadcast to all players in the room
       broadcastGameState(roomId, gameState);
     } catch (error) {
-      console.error(`Error creating app session for room ${roomId}:`, error);
+      console.error(`[websocketService] Error creating app session for room ${roomId}:`, error);
+
+      // Clean up any partial state
+      if (room.appId) {
+        try {
+          console.log(`[websocketService] Cleaning up failed app session ${room.appId}`);
+          await closeAppSession(room.appId);
+        } catch (closeError) {
+          console.error(`[websocketService] Error cleaning up failed app session:`, closeError);
+        }
+        room.appId = undefined; // Clear the app ID after successful closure
+      }
 
       ws.send(JSON.stringify({
         type: 'error',
-        message: 'Failed to create app session'
+        message: 'Failed to create app session: ' + error.message
       }));
     }
   }
@@ -336,7 +357,12 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
   if (!roomId) return;
 
   const room = getRoom(roomId);
-  if (!room || !room.appId) return;
+  if (!room || !room.appId) {
+    console.log(`[websocketService] Cannot finalize game - room ${roomId} not found or no app session`);
+    return;
+  }
+
+  console.log(`[websocketService] Finalizing game for room ${roomId} with app session ${room.appId}`);
 
   // For manual finalization - end the game immediately
   if (room.gameInterval) {
@@ -375,14 +401,19 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
     }
   }
 
-  // Close the app session
-  if (room.appId) {
+  // Close the app session if not already being closed
+  if (room.appId && !room.isClosingAppSession) {
     try {
-      console.log(`[websocketService] Closing app session for room ${room.appId}`);
+      room.isClosingAppSession = true;
+      console.log(`[websocketService] Closing app session ${room.appId} for room ${roomId}`);
       await closeAppSession(room.appId);
-      console.log(`[websocketService] App session closed successfully`);
+      console.log(`[websocketService] App session ${room.appId} closed successfully`);
+      room.appId = undefined; // Clear the app ID after successful closure
     } catch (error) {
-      console.error(`[websocketService] Error closing app session:`, error);
+      console.error(`[websocketService] Error closing app session ${room.appId}:`, error);
+      // Don't clear the app ID on error - it might still be valid
+    } finally {
+      room.isClosingAppSession = false;
     }
   }
 
@@ -418,29 +449,58 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
 
 // Handle client disconnect
 async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
-  console.log('[websocketService] Client disconnected');
+  console.log(`[websocketService] Client disconnected: ${ws.playerId}`);
 
+  // Find the room this player was in
   const roomId = ws.roomId;
-  const channelId = ws.channelId;
-  if (!roomId) return;
+  if (!roomId) {
+    console.log(`[websocketService] No room found for disconnected player ${ws.playerId}`);
+    return;
+  }
 
   const room = getRoom(roomId);
-  if (!room) return;
+  if (!room) {
+    console.log(`[websocketService] Room ${roomId} not found for disconnected player ${ws.playerId}`);
+    return;
+  }
 
-  // Remove player from room
+  // Remove the player from the room
   room.players.delete(ws.playerId);
+  console.log(`[websocketService] Removed player ${ws.playerId} from room ${roomId}`);
 
   // If room is empty and this wasn't an intentional disconnect, clean up
   if (room.players.size === 0 && ws.readyState === WebSocket.CLOSED) {
+    console.log(`[websocketService] Room ${roomId} is empty, cleaning up`);
+
+    // Stop the game interval if it's running
     if (room.gameInterval) {
       clearInterval(room.gameInterval);
+      room.gameInterval = null;
     }
 
-    // Finalize any remaining channels
+    // Mark game as over
+    room.isGameOver = true;
+
+    // Close the app session if not already being closed
+    if (room.appId && !room.isClosingAppSession) {
+      try {
+        room.isClosingAppSession = true;
+        console.log(`[websocketService] Closing app session ${room.appId} for room ${roomId}`);
+        await closeAppSession(room.appId);
+        console.log(`[websocketService] App session ${room.appId} closed successfully`);
+        room.appId = undefined; // Clear the app ID after successful closure
+      } catch (error) {
+        console.error(`[websocketService] Error closing app session ${room.appId}:`, error);
+        // Don't clear the app ID on error - it might still be valid
+      } finally {
+        room.isClosingAppSession = false;
+      }
+    }
+
+    // Finalize all channels associated with this room
     if (room.channelIds.size > 0) {
       const finalState = {
         roomId,
-        stateVersion: room.stateVersion,
         players: Array.from(room.players.values()).map(p => ({
           id: p.id,
           nickname: p.nickname,
@@ -449,7 +509,7 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
         })),
         isGameOver: true,
         finalizedAt: Date.now(),
-        reason: 'room_closed'
+        reason: 'player_disconnected'
       };
 
       const finalizePromises = Array.from(room.channelIds).map(id =>
@@ -458,64 +518,14 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
 
       try {
         await Promise.all(finalizePromises);
-        console.log(`[websocketService] Finalized all channels for closing room ${roomId}`);
+        console.log(`[websocketService] Finalized all channels for room ${roomId}`);
       } catch (error) {
         console.error(`[websocketService] Error finalizing channels for room ${roomId}:`, error);
       }
     }
 
+    // Remove the room
     removeRoom(roomId);
-    console.log(`[websocketService] Room deleted: ${roomId}`);
-  } else {
-    // If this client had a channel associated, mark the game as over
-    if (channelId && room.channelIds.has(channelId)) {
-      room.isGameOver = true;
-
-      // Finalize this channel
-      try {
-        const finalState = {
-          roomId,
-          stateVersion: room.stateVersion,
-          players: Array.from(room.players.values()).map(p => ({
-            id: p.id,
-            nickname: p.nickname,
-            score: p.score,
-            isDead: p.isDead || false
-          })),
-          isGameOver: true,
-          finalizedAt: Date.now(),
-          reason: 'player_disconnected'
-        };
-
-        await clearNetRPC.finalizeChannel(channelId, finalState);
-        room.channelIds.delete(channelId);
-        console.log(`[websocketService] Finalized channel ${channelId} due to player disconnect`);
-      } catch (error) {
-        console.error(`[websocketService] Error finalizing channel ${channelId}:`, error);
-      }
-    }
-
-    // Create updated game state
-    const gameState = {
-      type: 'gameState',
-      players: Array.from(room.players.values()).map(p => ({
-        id: p.id,
-        nickname: p.nickname,
-        segments: p.segments,
-        score: p.score,
-        isDead: p.isDead || false
-      })),
-      food: room.food,
-      gridSize: room.gridSize,
-      isGameOver: room.isGameOver || false,
-      stateVersion: ++room.stateVersion,
-      timestamp: Date.now()
-    };
-
-    // Store the current state in the room
-    room.currentState = gameState;
-
-    // Broadcast to all remaining players in the room
-    broadcastGameState(roomId, gameState);
+    console.log(`[websocketService] Room ${roomId} removed`);
   }
 }

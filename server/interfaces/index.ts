@@ -30,6 +30,7 @@ export interface Room {
   currentState: any;
   stateVersion: number;
   createdAt: number; // Timestamp when the room was created
+  isClosingAppSession?: boolean;
 }
 
 export interface PendingRequest {

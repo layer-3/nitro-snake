@@ -455,9 +455,11 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
     // Prepare the request object
     const participants = [participantA, participantB, signer.address as Hex];
     const initialIntent = [0, 0, 0];
-    console.log("signer", signer);
-    console.log("Participants", participants);
-    console.log("Initial intent", initialIntent);
+    console.log("[createAppSession] Creating app session with:", {
+        participants,
+        initialIntent,
+        signerAddress: signer.address
+    });
 
     const appDefinition: AppDefinition = {
         protocol: DEFAULT_PROTOCOL,
@@ -485,15 +487,15 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
         int: initialIntent,
     };
 
-    console.log("Sending create_app_session request:", request);
+    console.log("[createAppSession] Sending request:", request);
     const result = await sendToBroker(request);
     const appId = result.app_id || (typeof result[0] === "object" ? result[0].app_id : null);
-    console.log(`Created app session ${appId}`);
+    console.log(`[createAppSession] Created app session ${appId}`);
     return appId;
 }
 
 // Closes an application session in the broker
-export async function closeAppSession(appId: Hex): Promise<void> {
+export async function closeAppSession(appId: Hex, allocations: number[] = [0, 0, 0]): Promise<void> {
     // Ensure we're authenticated before closing an app session
     if (!isAuthenticated) {
         try {
@@ -510,17 +512,45 @@ export async function closeAppSession(appId: Hex): Promise<void> {
         throw new Error("Server wallet address not found");
     }
 
+    // Verify the app session exists before trying to close it
+    try {
+        const requestId = Date.now();
+        const method = "get_app_definition";
+        const params = [{ acc: appId }];
+        const timestamp = Math.floor(Date.now() / 1000);
+
+        const request = {
+            req: [requestId, method, params, timestamp],
+            sig: [""],
+        };
+
+        console.log("[closeAppSession] Verifying app session exists:", appId);
+        await sendToBroker(request);
+        console.log("[closeAppSession] App session exists, proceeding with close");
+    } catch (error) {
+        console.error(`[closeAppSession] App session ${appId} not found or already closed:`, error);
+        throw new Error(`App session ${appId} not found or already closed: ${error.message}`);
+    }
+
     // Prepare the request object
-    const allocations = [0,0,0];
-    const request = await createCloseAppSessionMessage(
-        signer.sign,
-        [{
-            app_id: appId,
-            allocations
-        }],
-        allocations
-    );
+    const requestId = Date.now();
+    const method = "close_app_session";
+    const params = [{
+        app_id: appId,
+        allocations,
+    }];
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    // Create request data
+    const request = {
+        req: [requestId, method, params, timestamp],
+        sig: [""], // signature will be populated by sendToBroker function
+        int: allocations,
+    };
+
+    console.log("[closeAppSession] Sending close request:", request);
     await sendToBroker(request);
+    console.log(`[closeAppSession] Closed app session ${appId}`);
 }
 
 // Helper function to sign state data with the server's private key
