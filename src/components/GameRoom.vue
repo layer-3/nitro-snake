@@ -222,7 +222,7 @@ const animate = () => {
 };
 
 // Watch for changes to socket and re-attach event listener
-watch(() => gameService.getIsConnected().value, (isConnected) => {
+watch(() => gameService.getIsConnected().value, (_) => {
   const ws = gameService.getWebSocket();
   if (ws) {
     ws.addEventListener('message', handleMessage);

@@ -3,7 +3,8 @@ import { ref, onMounted } from "vue";
 import { ethers } from "ethers";
 import { type NitroliteClientConfig } from "@erc7824/nitrolite";
 import { generateKeyPair } from "../crypto";
-import { createPublicClient, createWalletClient, custom, Hex, http } from "viem";
+import { createPublicClient, createWalletClient, custom, http } from "viem";
+import type { Hex } from "viem";
 import clearNetService from "../services/ClearNetService";
 import { CONTRACT_ADDRESSES } from "../config";
 import { polygon } from "viem/chains";
@@ -140,21 +141,13 @@ async function connectWallet() {
                 chain: polygon,
             });
 
-            // Create contract addresses configuration following the EthTaipei pattern
-            const ADDRESSES = {
-                // Using Ethereum dummy addresses with correct checksums
-                custody: CONTRACT_ADDRESSES.custody,
-                adjudicator: CONTRACT_ADDRESSES.adjudicator,
-                guestAddress: CONTRACT_ADDRESSES.guestAddress,
-                tokenAddress: CONTRACT_ADDRESSES.tokenAddress,
-            };
 
             // Create the actual Nitrolite configuration
             const nitroConfig: NitroliteClientConfig = {
                 publicClient,
                 walletClient,
                 stateWalletClient,
-                addresses: ADDRESSES,
+                addresses: CONTRACT_ADDRESSES,
                 chainId: polygon.id,
                 challengeDuration: BigInt(86400), // 1 day in seconds
             };

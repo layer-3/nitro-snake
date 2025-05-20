@@ -11,10 +11,7 @@ import {
     AppDefinition,
     NitroliteRPC,
     createGetLedgerBalancesMessage,
-    createAppSessionMessage,
     CreateAppSessionRequest,
-    createGetAppDefinitionMessage,
-    createCloseAppSessionMessage,
     CloseAppSessionRequest,
 } from "@erc7824/nitrolite";
 import { BROKER_WS_URL, CONTRACT_ADDRESSES, POLYGON_RPC_URL, WALLET_PRIVATE_KEY } from "../config";
@@ -38,7 +35,6 @@ function createClient(): NitroliteClient {
     // Create the wallet client using the ethereum provider
 
     const wallet = privateKeyToAccount(WALLET_PRIVATE_KEY);
-    const address = wallet.address;
     const walletClient = createWalletClient({
         transport: http(process.env.POLYGON_RPC_URL),
         chain: polygon,
@@ -51,24 +47,15 @@ function createClient(): NitroliteClient {
     });
 
     // Create a dedicated client for signing state updates
-    const stateWallet = new ethers.Wallet(WALLET_PRIVATE_KEY);
-    const stateWalletClient = {
-        ...stateWallet,
-        account: {
-            address: address,
-        },
-        signMessage: async ({ message: { raw } }) => {
-            console.log("Signing message:", raw);
-            const signature = await wallet.sign({ hash: raw });
-            console.log("Signature:", signature);
-            return signature;
-        },
-    };
+    const stateWalletClient = createWalletClient({
+        transport: http(process.env.POLYGON_RPC_URL),
+        chain: polygon,
+        account: wallet,
+    });
     const config: NitroliteClientConfig = {
         publicClient,
         walletClient,
         stateWalletClient,
-        account: address,
         addresses: CONTRACT_ADDRESSES,
         chainId: polygon.id,
         challengeDuration: BigInt(86400), // 1 day in seconds
@@ -212,10 +199,10 @@ async function authenticateWithBroker(): Promise<void> {
                         brokerWs.send(authVerify);
                         brokerWs.send(getBalances);
                         await getChannels();
-                    } catch (error) {
+                    } catch (error: unknown) {
                         console.error("Error creating auth verify message:", error);
                         cleanup();
-                        reject(new Error(`Failed to create auth verify message: ${error.message}`));
+                        reject(new Error(`Failed to create auth verify message: ${error}`));
                     }
                 }
                 // Check for auth_verify success response
@@ -231,10 +218,14 @@ async function authenticateWithBroker(): Promise<void> {
                     cleanup();
                     reject(new Error(errorMessage));
                 }
-            } catch (error) {
+            } catch (error: unknown) {
                 console.error("Error processing authentication message:", error);
                 cleanup();
-                reject(new Error(`Authentication processing error: ${error.message}`));
+                if (error instanceof Error) {
+                    reject(new Error(`Authentication processing error: ${error.message}`));
+                } else {
+                    reject(new Error('Authentication processing error: Unknown error'));
+                }
             }
         };
 
@@ -356,7 +347,11 @@ export async function sendToBroker(request: any): Promise<any> {
             await authenticateWithBroker();
         } catch (error) {
             console.error("Authentication failed:", error);
-            throw new Error(`Authentication failed: ${error.message}`);
+            if (error instanceof Error) {
+                throw new Error(`Authentication failed: ${error.message}`);
+            } else {
+                throw new Error('Authentication failed: Unknown error');
+            }
         }
     }
 
@@ -441,8 +436,12 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
         try {
             await authenticateWithBroker();
         } catch (error) {
-            console.error(`Authentication failed before creating app session: ${error.message}`);
-            throw new Error(`Authentication required to create app session: ${error.message}`);
+            console.error(`Authentication failed before creating app session:`, error);
+            if (error instanceof Error) {
+                throw new Error(`Authentication required to create app session: ${error.message}`);
+            } else {
+                throw new Error('Authentication required to create app session: Unknown error');
+            }
         }
     }
 
@@ -470,7 +469,7 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
     };
     const params: CreateAppSessionRequest[] = [{
         definition: appDefinition,
-        allocations: participants.map((participant, i) => ({
+        allocations: participants.map((participant) => ({
             participant,
             asset: CONTRACT_ADDRESSES.tokenAddress as Hex,
             amount: "0",
@@ -497,8 +496,12 @@ export async function closeAppSession(appId: Hex, participantA: Hex, participant
         try {
             await authenticateWithBroker();
         } catch (error) {
-            console.error(`Authentication failed before closing app session: ${error.message}`);
-            throw new Error(`Authentication required to close app session: ${error.message}`);
+            console.error(`Authentication failed before closing app session:`, error);
+            if (error instanceof Error) {
+                throw new Error(`Authentication required to close app session: ${error.message}`);
+            } else {
+                throw new Error('Authentication required to close app session: Unknown error');
+            }
         }
     }
 
@@ -520,7 +523,11 @@ export async function closeAppSession(appId: Hex, participantA: Hex, participant
         console.log("[closeAppSession] App session exists, proceeding with close");
     } catch (error) {
         console.error(`[closeAppSession] App session ${appId} not found or already closed:`, error);
-        throw new Error(`App session ${appId} not found or already closed: ${error.message}`);
+        if (error instanceof Error) {
+            throw new Error(`App session ${appId} not found or already closed: ${error.message}`);
+        } else {
+            throw new Error(`App session ${appId} not found or already closed: Unknown error`);
+        }
     }
 
     // Prepare the request
@@ -608,7 +615,7 @@ export async function signRpcRequest(requestData: any[]): Promise<string> {
 export function verifySignature(message: string, signature: string, expectedAddress: string): boolean {
     try {
         // Use standard Ethereum message verification
-        const recoveredAddress = ethers.verifyMessage(message, signature);
+        const recoveredAddress = ethers.utils.verifyMessage(message, signature);
 
         // Check if the recovered address matches the expected address
         return recoveredAddress.toLowerCase() === expectedAddress.toLowerCase();

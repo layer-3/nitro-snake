@@ -1,4 +1,4 @@
-import { Express } from 'express';
+import { Express, RequestHandler } from 'express';
 import { ethers } from 'ethers';
 import { randomBytes } from 'crypto';
 import { SERVER_PRIVATE_KEY, CONTRACT_ADDRESSES } from '../config';
@@ -15,11 +15,12 @@ import {
   verifyChallengeSignature
 } from '../middlewares/authMiddleware';
 import { Room } from '../interfaces';
+import { Hex } from 'viem';
 
 // Setup API routes for the Express app
 export function setupApiRoutes(app: Express): void {
   // Contract addresses endpoint
-  app.get('/api/contract-addresses', (req, res) => {
+  app.get('/api/contract-addresses', ((_, res) => {
     const wallet = new ethers.Wallet(SERVER_PRIVATE_KEY);
     res.json({
       custody: CONTRACT_ADDRESSES.custody,
@@ -27,10 +28,10 @@ export function setupApiRoutes(app: Express): void {
       tokenAddress: CONTRACT_ADDRESSES.tokenAddress,
       serverAddress: wallet.address // Return the server's Ethereum address
     });
-  });
+  }) as RequestHandler);
 
   // Get active rooms
-  app.get('/api/rooms', (req, res) => {
+  app.get('/api/rooms', ((_, res) => {
     const activeRooms = Array.from(getAllRooms().entries())
       .filter(([_, room]) => room.players.size < 2) // Only return rooms that aren't full
       .map(([id, room]) => ({
@@ -40,10 +41,10 @@ export function setupApiRoutes(app: Express): void {
       }));
 
     res.json(activeRooms);
-  });
+  }) as RequestHandler);
 
   // Get room details
-  app.get('/api/rooms/:roomId', (req, res) => {
+  app.get('/api/rooms/:roomId', ((req, res) => {
     const { roomId } = req.params;
     const room = getRoom(roomId);
 
@@ -58,10 +59,10 @@ export function setupApiRoutes(app: Express): void {
       channelIds: Array.from(room.channelIds),
       createdAt: room.createdAt
     });
-  });
+  }) as RequestHandler);
 
   // Room channel endpoint
-  app.get('/api/rooms/:roomId/channel', (req, res) => {
+  app.get('/api/rooms/:roomId/channel', ((req, res) => {
     const roomId = req.params.roomId;
     const room = getRoom(roomId);
 
@@ -79,11 +80,11 @@ export function setupApiRoutes(app: Express): void {
       channelId: channelIds[0],
       roomId
     });
-  });
+  }) as RequestHandler);
 
   // Game sessions endpoint
-  app.post('/api/game-sessions', async (req, res) => {
-    const { channelId, initialState } = req.body;
+  app.post('/api/game-sessions', (async (req, res) => {
+    const { channelId } = req.body;
 
     if (!channelId) {
       return res.status(400).json({ error: 'Channel ID is required' });
@@ -118,16 +119,14 @@ export function setupApiRoutes(app: Express): void {
       console.error('Error creating game session:', error);
       res.status(500).json({ error: 'Failed to create game session' });
     }
-  });
+  }) as RequestHandler);
 
   // Get game session channel state
-  app.get('/api/game-sessions/:sessionId/state', async (req, res) => {
+  app.get('/api/game-sessions/:sessionId/state', (async (req, res) => {
     const { sessionId } = req.params;
 
     try {
-      // In a real implementation, we would look up the session by ID
-      // For now, extract the channelId from the sessionId format (session_<random>)
-      const channelId = req.query.channelId as string;
+      const channelId = req.query.channelId as Hex;
 
       if (!channelId) {
         return res.status(400).json({ error: 'Channel ID is required as a query parameter' });
@@ -172,18 +171,18 @@ export function setupApiRoutes(app: Express): void {
       console.error('Error getting game session state:', error);
       res.status(500).json({ error: 'Failed to get game session state' });
     }
-  });
+  }) as RequestHandler);
 
   // Authentication status endpoint
-  app.get('/api/auth-status', (req, res) => {
+  app.get('/api/auth-status', ((_, res) => {
     res.json({
       authenticated: isAuthenticatedWithBroker(),
       serverAddress: new ethers.Wallet(SERVER_PRIVATE_KEY).address
     });
-  });
+  }) as RequestHandler);
 
   // Sign state endpoint
-  app.post('/api/sign-state', async (req, res) => {
+  app.post('/api/sign-state', (async (req, res) => {
     const { stateData } = req.body;
 
     if (!stateData) {
@@ -201,10 +200,10 @@ export function setupApiRoutes(app: Express): void {
       console.error('Error signing state:', error);
       res.status(500).json({ error: 'Failed to sign state data' });
     }
-  });
+  }) as RequestHandler);
 
   // Verify signature endpoint
-  app.post('/api/verify-signature', (req, res) => {
+  app.post('/api/verify-signature', ((req, res) => {
     const { message, signature, address } = req.body;
 
     if (!message || !signature || !address) {
@@ -224,13 +223,13 @@ export function setupApiRoutes(app: Express): void {
       console.error('Error verifying signature:', error);
       res.status(500).json({ error: 'Failed to verify signature' });
     }
-  });
+  }) as RequestHandler);
 
   // Generate challenge for client authentication
-  app.post('/api/auth/challenge', (req, res) => {
+  app.post('/api/auth/challenge', ((req, res) => {
     const { address } = req.body;
 
-    if (!address || !ethers.isAddress(address)) {
+    if (!address || !ethers.utils.isAddress(address)) {
       return res.status(400).json({ error: 'Valid Ethereum address is required' });
     }
 
@@ -247,10 +246,10 @@ export function setupApiRoutes(app: Express): void {
       console.error('Error generating challenge:', error);
       res.status(500).json({ error: 'Failed to generate authentication challenge' });
     }
-  });
+  }) as RequestHandler);
 
   // Verify client auth response
-  app.post('/api/auth/verify', (req, res) => {
+  app.post('/api/auth/verify', ((req, res) => {
     const { address, signature } = req.body;
 
     if (!address || !signature) {
@@ -284,7 +283,7 @@ export function setupApiRoutes(app: Express): void {
       console.error('Error verifying authentication:', error);
       res.status(500).json({ error: 'Failed to verify authentication' });
     }
-  });
+  }) as RequestHandler);
 
   // Protected route example that requires authentication
   app.get('/api/protected/user-info', requireAuth, (req, res) => {

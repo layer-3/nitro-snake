@@ -29,7 +29,7 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
     const snakeWs = ws as SnakeWebSocket;
     snakeWs.playerId = randomBytes(8).toString('hex');
 
-    snakeWs.on('message', async (message) => {
+    snakeWs.on('message', async (message: WebSocket.Data) => {
       try {
         const data = JSON.parse(message.toString());
         await handleWebSocketMessage(snakeWs, data);
@@ -86,12 +86,12 @@ async function handleWebSocketMessage(ws: SnakeWebSocket, data: any): Promise<vo
     }
 
     case 'playAgain': {
-      await handlePlayAgain(ws, data);
+      await handlePlayAgain(data);
       break;
     }
 
     case 'finalizeGame': {
-      await handleFinalizeGame(ws, data);
+      await handleFinalizeGame(data);
       break;
     }
   }
@@ -240,7 +240,7 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
 
       // Broadcast to all players in the room
       broadcastGameState(roomId, gameState);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error(`[websocketService] Error creating app session for room ${roomId}:`, error);
 
       // Clean up any partial state
@@ -260,7 +260,7 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
 
       ws.send(JSON.stringify({
         type: 'error',
-        message: 'Failed to create app session: ' + error.message
+        message: 'Failed to create app session: ' + (error instanceof Error ? error.message : 'Unknown error')
       }));
     }
   }
@@ -295,7 +295,7 @@ async function handleChangeDirection(ws: SnakeWebSocket, data: any): Promise<voi
 }
 
 // Handle play again message
-async function handlePlayAgain(ws: SnakeWebSocket, data: any): Promise<void> {
+async function handlePlayAgain(data: any): Promise<void> {
   const { roomId } = data;
   if (!roomId) return;
 
@@ -356,7 +356,7 @@ async function handlePlayAgain(ws: SnakeWebSocket, data: any): Promise<void> {
 }
 
 // Handle finalize game message
-async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> {
+async function handleFinalizeGame(data: any): Promise<void> {
   const { roomId } = data;
   if (!roomId) return;
 

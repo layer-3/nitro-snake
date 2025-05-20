@@ -3,7 +3,6 @@ import {
     createAuthRequestMessage,
     createAuthVerifyMessage,
     createGetLedgerBalancesMessage,
-    type CreateChannelParams,
     type NitroliteClientConfig,
 } from "@erc7824/nitrolite";
 import { BROKER_WS_URL } from "../config";
@@ -35,6 +34,7 @@ class ClearNetService {
     private maxReconnectAttempts = 5;
     private reconnectDelay = 1000;
     private reconnectTimeout: NodeJS.Timeout | null = null;
+    private authenticationInProgress: Promise<void> | null = null;
 
     constructor() {
         // Try to restore channel from localStorage on initialization
@@ -49,7 +49,7 @@ class ClearNetService {
             if (channelId && channelState) {
                 this.activeChannel = {
                     channelId,
-                    state: JSON.parse(channelState, (key, value) => {
+                    state: JSON.parse(channelState, (_, value) => {
                         // Handle bigint values stored as strings
                         if (typeof value === 'string' && value.endsWith('n')) {
                             return BigInt(value.slice(0, -1));
@@ -216,8 +216,6 @@ class ClearNetService {
             });
         }, delay);
     }
-
-    private authenticationInProgress: Promise<void> | null = null;
 
     private async authenticateWithBroker(): Promise<void> {
         // If authentication is already in progress, return the existing promise
@@ -423,138 +421,6 @@ class ClearNetService {
         }
     }
 
-    async depositAndCreateChannel(amount: bigint, stateData: Hex): Promise<ChannelData | null> {
-        if (!this.client || !this.isConnected) {
-            console.error("ClearNet client not initialized");
-            return null;
-        }
-
-        try {
-            console.log("Creating channel with deposit:", amount.toString());
-            console.log("State data:", stateData);
-
-            // Use the actual Nitrolite client to create the channel
-            const params: CreateChannelParams = {
-                initialAllocationAmounts: [
-                    amount,   // participant allocates funds
-                    BigInt(0) // server allocates nothing since it's just a game coordinator and not a participant
-                ],
-                stateData,
-            };
-            const result = await this.client.createChannel(params);
-            if (!result || !result.channelId) {
-                throw new Error("Failed to create channel: Invalid response");
-            }
-
-            // Save the channel data from the actual client call
-            this.activeChannel = {
-                channelId: result.channelId,
-                state: result.initialState,
-            };
-
-            console.log(`Channel created successfully with ID: ${result.channelId}`);
-
-            // Store channel in localStorage for persistence
-            try {
-                localStorage.setItem("nitro_channel_id", result.channelId);
-                localStorage.setItem(
-                    "nitro_channel_state",
-                    JSON.stringify(result.initialState, (key, value) => (typeof value === "bigint" ? value.toString() + "n" : value))
-                );
-            } catch (error) {
-                console.error("Failed to save channel to localStorage:", error);
-            }
-
-            return this.activeChannel;
-        } catch (error) {
-            console.error("Failed to deposit and create channel:", error);
-            return null;
-        }
-    }
-
-    async getAccountInfo() {
-        if (!this.client || !this.isConnected) {
-            console.error("ClearNet client not initialized");
-            return null;
-        }
-
-        try {
-            return await this.client.getAccountInfo();
-        } catch (error) {
-            console.error("Failed to get account info:", error);
-            return null;
-        }
-    }
-
-    // This method notifies the game server about a player joining a room
-    async joinGameRoom(roomId: string, nickname: string) {
-        if (!this.client || !this.isConnected || !this.activeChannel) {
-            console.error("ClearNet client not initialized or no active channel");
-            return null;
-        }
-
-        try {
-            // In a real implementation, this would connect to the game server WebSocket
-            // and send a joinRoom message with the channel ID
-
-            // For reference, a joinRoom message might look like:
-            const joinRoomMessage = {
-                type: "joinRoom",
-                roomId,
-                nickname,
-                channelId: this.activeChannel.channelId,
-                walletAddress: this.currentAddress,
-            };
-
-            // This would normally be sent to the game server WebSocket
-
-            return {
-                roomId,
-                playerId: `player_${Math.floor(Math.random() * 1000)}`,
-                channelId: this.activeChannel.channelId,
-            };
-        } catch (error) {
-            console.error("Failed to join game room:", error);
-            return null;
-        }
-    }
-
-    async updateGameState(newState: string, version: bigint) {
-        if (!this.client || !this.isConnected || !this.activeChannel) {
-            console.error("ClearNet client not initialized or no active channel");
-            return false;
-        }
-
-        try {
-            // In the new design, game state updates are handled by the game server
-            // and not directly by the client. The game server maintains the game state
-            // and calls the broker to update the app session state when necessary.
-
-            // This function would typically just notify the game server about
-            // client-side events like direction changes, but doesn't directly
-            // update the channel or app session state.
-
-            // For documentation purposes, a game state update message to the game server
-            // might look like this:
-            const gameStateUpdateMessage = {
-                type: "gameStateUpdate",
-                channelId: this.activeChannel.channelId,
-                state: newState,
-                version: version.toString(),
-                timestamp: Date.now(),
-            };
-
-            // In a real implementation, this would be sent to the game server's WebSocket
-
-            console.log("Game state update:", gameStateUpdateMessage);
-
-            return true;
-        } catch (error) {
-            console.error("Failed to update game state:", error);
-            return false;
-        }
-    }
-
     async signState(stateData: any, stateId: string, channelId: string) {
         if (!this.client || !this.isConnected) {
             console.error("ClearNet client not initialized");
@@ -590,63 +456,6 @@ class ClearNetService {
             };
         } catch (error) {
             console.error("Failed to sign state:", error);
-            return null;
-        }
-    }
-
-    // Get detailed channel information from ClearNet RPC
-    async getChannelDetails(channelId: string): Promise<any> {
-        if (!this.client || !this.isConnected || !this.wsConnection) {
-            console.error("ClearNet client not initialized or WebSocket not connected");
-            return null;
-        }
-
-        try {
-            // Create a promise that will be resolved when we receive the channel details
-            return new Promise((resolve, reject) => {
-                // Generate a unique message ID for this request
-                const messageId = Date.now();
-
-                // Create a timeout to reject the promise if we don't get a response
-                const timeout = setTimeout(() => {
-                    reject(new Error("Timeout waiting for channel details"));
-                }, 10000); // 10 second timeout
-
-                // Set up a one-time message handler for this specific request
-                const messageHandler = (event: MessageEvent) => {
-                    try {
-                        const response = JSON.parse(event.data);
-
-                        // Check if this is the response to our request
-                        if (response.id === messageId && response.result && response.result.channelId === channelId) {
-                            // Clean up
-                            clearTimeout(timeout);
-                            this.wsConnection?.removeEventListener("message", messageHandler);
-
-                            // Resolve with the channel details
-                            resolve(response.result);
-                        }
-                    } catch (error) {
-                        // Ignore parse errors or messages that don't match our criteria
-                    }
-                };
-
-                // Add the temporary event listener
-                this.wsConnection?.addEventListener("message", messageHandler);
-
-                // Format the message according to NitroliteRPC standard
-                const message = {
-                    jsonrpc: "2.0",
-                    method: "getChannelDetails",
-                    params: { channelId },
-                    id: messageId,
-                };
-
-                // Send message through WebSocket
-                this.wsConnection.send(JSON.stringify(message));
-            });
-        } catch (error) {
-            console.error(`Failed to get details for channel ${channelId}:`, error);
             return null;
         }
     }
@@ -699,7 +508,7 @@ class ClearNetService {
 
             // Sign the state hash
             const stateHash = await this.getStateHash(initialState);
-            const signingClient = this.client.config.stateWalletClient || this.client.config.walletClient;
+            const signingClient = this.config.stateWalletClient || this.config.walletClient;
 
             // Sign the state hash
             const signature = await signingClient.signMessage({
@@ -713,7 +522,7 @@ class ClearNetService {
                 localStorage.setItem("nitro_channel_id", channelId);
                 localStorage.setItem(
                     "nitro_channel_state",
-                    JSON.stringify(initialState, (key, value) => (typeof value === "bigint" ? value.toString() + "n" : value))
+                    JSON.stringify(initialState, (_, value) => (typeof value === "bigint" ? value.toString() + "n" : value))
                 );
             } catch (error) {
                 console.error("Failed to save channel to localStorage:", error);
@@ -734,7 +543,7 @@ class ClearNetService {
     }
 
     // Helper method to hash a state with the Nitrolite protocol standard
-    async getStateHash(state: any): Promise<Hex> {
+    private async getStateHash(state: any): Promise<Hex> {
         if (!this.client) {
             throw new Error("ClearNet client not initialized");
         }
@@ -767,32 +576,12 @@ class ClearNetService {
         }
     }
 
-    isClientConnected(): boolean {
-        return this.isConnected && this.client !== null;
-    }
-
     getActiveChannel(): ChannelData | null {
         // If we don't have an active channel but have one in storage, try to restore it
         if (!this.activeChannel) {
             this.restoreChannelFromStorage();
         }
         return this.activeChannel;
-    }
-
-    // Get the current WebSocket connection
-    getWebSocketConnection(): WebSocket | null {
-        return this.wsConnection;
-    }
-
-    // Cleanup method to close WebSocket connection
-    cleanup() {
-        if (this.wsConnection) {
-            this.wsConnection.close();
-            this.wsConnection = null;
-        }
-
-        this.isConnected = false;
-        this.activeChannel = null;
     }
 }
 
