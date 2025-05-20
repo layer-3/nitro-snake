@@ -11,6 +11,11 @@ import {
     AppDefinition,
     NitroliteRPC,
     createGetLedgerBalancesMessage,
+    createAppSessionMessage,
+    CreateAppSessionRequest,
+    createGetAppDefinitionMessage,
+    createCloseAppSessionMessage,
+    CloseAppSessionRequest,
 } from "@erc7824/nitrolite";
 import { BROKER_WS_URL, CONTRACT_ADDRESSES, POLYGON_RPC_URL, WALLET_PRIVATE_KEY } from "../config";
 import { setBrokerWebSocket, getBrokerWebSocket, addPendingRequest, getPendingRequest, clearPendingRequest } from "./stateService";
@@ -449,10 +454,8 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
 
     // Prepare the request object
     const participants = [participantA, participantB, signer.address as Hex];
-    const initialIntent = [0, 0, 0];
     console.log("[createAppSession] Creating app session with:", {
         participants,
-        initialIntent,
         signerAddress: signer.address
     });
 
@@ -464,22 +467,18 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
         challenge: 0,
         nonce: Date.now(),
     };
-
-    // Create the request in the format expected by the broker
-    const requestId = Date.now();
-    const method = "create_app_session";
-    const params = [{
+    const params: CreateAppSessionRequest[] = [{
         definition: appDefinition,
-        token: CONTRACT_ADDRESSES.tokenAddress as Hex,
-        allocations: initialIntent,
-    }];
+        allocations: participants.map((participant, i) => ({
+            participant,
+            asset: CONTRACT_ADDRESSES.tokenAddress as Hex,
+            amount: "0",
+        }))
+    }]
+    const requestId = Date.now();
     const timestamp = Math.floor(Date.now() / 1000);
 
-    // Create request data
-    const request = {
-        req: [requestId, method, params, timestamp],
-        int: initialIntent,
-    };
+    const request = await createAppSessionMessage(signer.sign, params, requestId, timestamp);
 
     console.log("[createAppSession] Sending request:", request);
     const result = await sendToBroker(request);
@@ -489,7 +488,7 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
 }
 
 // Closes an application session in the broker
-export async function closeAppSession(appId: Hex, allocations: number[] = [0, 0, 0]): Promise<void> {
+export async function closeAppSession(appId: Hex, participantA: Hex, participantB: Hex): Promise<void> {
     // Ensure we're authenticated before closing an app session
     if (!isAuthenticated) {
         try {
@@ -508,15 +507,7 @@ export async function closeAppSession(appId: Hex, allocations: number[] = [0, 0,
 
     // Verify the app session exists before trying to close it
     try {
-        const requestId = Date.now();
-        const method = "get_app_definition";
-        const params = [{ acc: appId }];
-        const timestamp = Math.floor(Date.now() / 1000);
-
-        const request = {
-            req: [requestId, method, params, timestamp],
-        };
-
+        const request = await createGetAppDefinitionMessage(signer.sign, appId);
         console.log("[closeAppSession] Verifying app session exists:", appId);
         await sendToBroker(request);
         console.log("[closeAppSession] App session exists, proceeding with close");
@@ -525,20 +516,17 @@ export async function closeAppSession(appId: Hex, allocations: number[] = [0, 0,
         throw new Error(`App session ${appId} not found or already closed: ${error.message}`);
     }
 
-    // Prepare the request object
-    const requestId = Date.now();
-    const method = "close_app_session";
-    const params = [{
-        app_id: appId,
-        allocations,
+    // Prepare the request
+    const params: CloseAppSessionRequest[] = [{
+        app_session_id: appId,
+        allocations: [participantA, participantB, signer.address].map((participant) => ({
+            participant,
+            asset: CONTRACT_ADDRESSES.tokenAddress as Hex,
+            amount: "0",
+        })),
     }];
-    const timestamp = Math.floor(Date.now() / 1000);
-
-    // Create request data
-    const request = {
-        req: [requestId, method, params, timestamp],
-        int: allocations,
-    };
+    const request = await createCloseAppSessionMessage(signer.sign, params);
+    console.log("[closeAppSession] Sending close request:", request);
 
     console.log("[closeAppSession] Sending close request:", request);
     await sendToBroker(request);
@@ -615,81 +603,5 @@ export function verifySignature(message: string, signature: string, expectedAddr
     } catch (error) {
         console.error("Error verifying signature:", error);
         return false;
-    }
-}
-
-// Sign and send game state updates
-export async function updateAppState(appId: string, channelId: string, newState: any, stateVersion: number): Promise<boolean> {
-    // Ensure we're authenticated
-    if (!isAuthenticated) {
-        try {
-            await authenticateWithBroker();
-        } catch (error) {
-            console.error(`Authentication failed before updating app state: ${error.message}`);
-            return false;
-        }
-    }
-
-    try {
-        // Convert state to string
-        const stateString = JSON.stringify(newState);
-
-        // Sign the state data
-        const { signature, address } = await signStateData(stateString);
-
-        // Prepare the request object
-        const requestId = Date.now();
-        const method = "update_app_state";
-        const reqParams = [
-            {
-                app_id: appId,
-                channel_id: channelId,
-                state: stateString,
-                signature, // The signature of the state
-                signer: address,
-                state_version: stateVersion,
-            },
-        ];
-        const timestamp = Math.floor(Date.now() / 1000);
-
-        // Create request data - we'll let sendToBroker sign it
-        const request = {
-            req: [requestId, method, reqParams, timestamp],
-            sig: [signature], // Initially use the state signature, sendToBroker will replace if needed
-        };
-
-        // Send the update request
-        await sendToBroker(request);
-        console.log(`Updated app state for ${appId} in channel ${channelId}`);
-        return true;
-    } catch (error) {
-        console.error(`Error updating app state: ${error}`);
-        return false;
-    }
-}
-
-// Get channel information from the broker
-export async function getChannelInfo(channelId: string): Promise<any> {
-    try {
-        // Prepare the request object
-        const requestId = Date.now();
-        const method = "get_channel_info";
-        const reqParams = [
-            {
-                channel_id: channelId,
-            },
-        ];
-        const timestamp = Math.floor(Date.now() / 1000);
-
-        // Create request data - we'll let sendToBroker sign it
-        const request = {
-            req: [requestId, method, reqParams, timestamp],
-        };
-
-        const result = await sendToBroker(request);
-        return result;
-    } catch (error) {
-        console.error(`Error getting channel info: ${error}`);
-        return null;
     }
 }

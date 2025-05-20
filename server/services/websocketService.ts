@@ -247,7 +247,11 @@ async function handleJoinRoom(ws: SnakeWebSocket, data: any): Promise<void> {
       if (room.appId) {
         try {
           console.log(`[websocketService] Cleaning up failed app session ${room.appId}`);
-          await closeAppSession(room.appId);
+          const players = Array.from(room.players.values());
+          await closeAppSession(
+            room.appId,
+            room.playerAddresses.get(players[0].id) as Hex,
+            room.playerAddresses.get(players[1].id) as Hex);
         } catch (closeError) {
           console.error(`[websocketService] Error cleaning up failed app session:`, closeError);
         }
@@ -406,7 +410,11 @@ async function handleFinalizeGame(ws: SnakeWebSocket, data: any): Promise<void> 
     try {
       room.isClosingAppSession = true;
       console.log(`[websocketService] Closing app session ${room.appId} for room ${roomId}`);
-      await closeAppSession(room.appId);
+      const players = Array.from(room.players.values());
+      await closeAppSession(
+        room.appId,
+        room.playerAddresses.get(players[0].id) as Hex,
+        room.playerAddresses.get(players[1].id) as Hex);
       console.log(`[websocketService] App session ${room.appId} closed successfully`);
       room.appId = undefined; // Clear the app ID after successful closure
     } catch (error) {
@@ -486,7 +494,11 @@ async function handleDisconnect(ws: SnakeWebSocket): Promise<void> {
       try {
         room.isClosingAppSession = true;
         console.log(`[websocketService] Closing app session ${room.appId} for room ${roomId}`);
-        await closeAppSession(room.appId);
+        const players = Array.from(room.players.values());
+        await closeAppSession(
+          room.appId,
+          room.playerAddresses.get(players[0].id) as Hex,
+          room.playerAddresses.get(players[1].id) as Hex);
         console.log(`[websocketService] App session ${room.appId} closed successfully`);
         room.appId = undefined; // Clear the app ID after successful closure
       } catch (error) {

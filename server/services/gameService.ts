@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import { Player } from '../interfaces';
 import { getRoom } from './stateService';
 import { closeAppSession } from './brokerService';
+import { Hex } from 'viem';
 
 // Import websocketService to broadcast game state - imported at bottom of file to avoid circular dependency
 let broadcastGameStateToClients: (roomId: string, gameState: any) => void;
@@ -203,7 +204,11 @@ export async function broadcastGameState(roomId: string): Promise<void> {
 
       // Close the app session
       console.log(`[broadcastGameState] Closing app session`);
-      await closeAppSession(room.appId);
+      const players = Array.from(room.players.values());
+      await closeAppSession(
+        room.appId,
+        room.playerAddresses.get(players[0].id) as Hex,
+        room.playerAddresses.get(players[1].id) as Hex);
       console.log(`[broadcastGameState] App session closed successfully`);
 
       // Clear the app ID after successful closure

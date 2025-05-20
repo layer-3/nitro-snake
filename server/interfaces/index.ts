@@ -26,7 +26,7 @@ export interface Room {
   isGameOver?: boolean;
   channelIds: Set<string>;
   appId?: Hex;
-  playerAddresses: Map<string, string>; // Maps playerId to their ethereum address
+  playerAddresses: Map<string, Hex>; // Maps playerId to their ethereum address
   currentState: any;
   stateVersion: number;
   createdAt: number; // Timestamp when the room was created

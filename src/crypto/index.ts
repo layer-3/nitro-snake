@@ -1,7 +1,5 @@
 import { ethers } from 'ethers';
-
-// Define a type for hexadecimal strings that start with 0x
-type Hex = `0x${string}`;
+import type { Hex } from 'viem';
 
 /**
  * Interface for a cryptographic keypair
@@ -12,7 +10,7 @@ export interface CryptoKeypair {
     /** Private key in hexadecimal format */
     privateKey: string;
     /** Optional Ethereum address derived from the public key */
-    address?: string;
+    address?: Hex;
 }
 
 /**
@@ -27,7 +25,7 @@ export interface WalletSigner {
     /** Public key in hexadecimal format */
     publicKey: string;
     /** Ethereum address derived from the public key */
-    address: string;
+    address: Hex;
     /** Function to sign a message and return a hex signature */
     sign: MessageSigner;
 }
@@ -70,14 +68,14 @@ export const createEthersSigner = (privateKey: string): WalletSigner => {
 
         return {
             publicKey: wallet.publicKey,
-            address: wallet.address,
+            address: wallet.address as Hex,
             sign: async (payload: any): Promise<Hex> => {
                 try {
                     // Convert payload to string if needed
-                    const payloadStr = typeof payload === 'string' 
-                        ? payload 
+                    const payloadStr = typeof payload === 'string'
+                        ? payload
                         : JSON.stringify(payload);
-                        
+
                     // Hash the payload string
                     const messageBytes = ethers.utils.arrayify(ethers.utils.id(payloadStr));
 
@@ -118,7 +116,7 @@ export const generateKeyPair = async (): Promise<CryptoKeypair> => {
         return {
             privateKey: privateKeyHash,
             publicKey: walletFromHashedKey.publicKey,
-            address: walletFromHashedKey.address,
+            address: walletFromHashedKey.address as Hex,
         };
     } catch (error) {
         console.error('Error generating keypair, using fallback:', error);
@@ -130,7 +128,7 @@ export const generateKeyPair = async (): Promise<CryptoKeypair> => {
         return {
             privateKey: privateKey,
             publicKey: wallet.publicKey,
-            address: wallet.address,
+            address: wallet.address as Hex,
         };
     }
 };
