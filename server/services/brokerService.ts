@@ -459,6 +459,7 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
         signerAddress: signer.address
     });
 
+    const requestId = Date.now();
     const appDefinition: AppDefinition = {
         protocol: DEFAULT_PROTOCOL,
         participants,
@@ -475,14 +476,13 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
             amount: "0",
         }))
     }]
-    const requestId = Date.now();
     const timestamp = Math.floor(Date.now() / 1000);
 
     const request = await createAppSessionMessage(signer.sign, params, requestId, timestamp);
 
     console.log("[createAppSession] Sending request:", request);
     const result = await sendToBroker(request);
-    const appId = result.app_id || (typeof result[0] === "object" ? result[0].app_id : null);
+    const appId = result.app_session_id || (typeof result[0] === "object" ? result[0].app_session_id : null);
     console.log(`[createAppSession] Created app session ${appId}`);
     return appId;
 }
@@ -517,6 +517,7 @@ export async function closeAppSession(appId: Hex, participantA: Hex, participant
     }
 
     // Prepare the request
+    const requestId = Date.now();
     const params: CloseAppSessionRequest[] = [{
         app_session_id: appId,
         allocations: [participantA, participantB, signer.address].map((participant) => ({
@@ -525,8 +526,9 @@ export async function closeAppSession(appId: Hex, participantA: Hex, participant
             amount: "0",
         })),
     }];
-    const request = await createCloseAppSessionMessage(signer.sign, params);
-    console.log("[closeAppSession] Sending close request:", request);
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const request = await createCloseAppSessionMessage(signer.sign, params, requestId, timestamp);
 
     console.log("[closeAppSession] Sending close request:", request);
     await sendToBroker(request);
