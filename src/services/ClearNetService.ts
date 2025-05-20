@@ -3,6 +3,7 @@ import {
     createAuthRequestMessage,
     createAuthVerifyMessage,
     createGetLedgerBalancesMessage,
+    type CreateChannelParams,
     type NitroliteClientConfig,
 } from "@erc7824/nitrolite";
 import { BROKER_WS_URL } from "../config";
@@ -16,7 +17,7 @@ export interface ChannelData {
 
 class ClearNetService {
     public client!: NitroliteClient;
-    public config: NitroliteClientConfig | null = null;
+    public config!: NitroliteClientConfig;
     private isConnected = false;
     private currentAddress: string | null = null;
     private activeChannel: ChannelData | null = null;
@@ -254,7 +255,7 @@ class ClearNetService {
 
         // Create a new authentication promise and store it
         const authPromise = new Promise<void>((resolve, reject) => {
-            let authTimeout: number;
+            let authTimeout: NodeJS.Timeout;
 
             // Create a one-time message handler for authentication
             const authMessageHandler = async (event: MessageEvent) => {
@@ -328,7 +329,7 @@ class ClearNetService {
                         } catch (error) {
                             console.error("Error creating auth verify message:", error);
                             cleanup();
-                            reject(new Error(`Failed to create auth verify message: ${error.message}`));
+                            reject(new Error("Failed to create auth verify message"));
                         }
                     }
                     // Check for auth_verify success response
@@ -422,7 +423,7 @@ class ClearNetService {
         }
     }
 
-    async depositAndCreateChannel(amount: bigint, stateData: string): Promise<ChannelData | null> {
+    async depositAndCreateChannel(amount: bigint, stateData: Hex): Promise<ChannelData | null> {
         if (!this.client || !this.isConnected) {
             console.error("ClearNet client not initialized");
             return null;
@@ -433,10 +434,14 @@ class ClearNetService {
             console.log("State data:", stateData);
 
             // Use the actual Nitrolite client to create the channel
-            const result = await this.client.createChannel({
-                initialAllocationAmounts: [amount, BigInt(0)],
+            const params: CreateChannelParams = {
+                initialAllocationAmounts: [
+                    amount,   // participant allocates funds
+                    BigInt(0) // server allocates nothing since it's just a game coordinator and not a participant
+                ],
                 stateData,
-            });
+            };
+            const result = await this.client.createChannel(params);
             if (!result || !result.channelId) {
                 throw new Error("Failed to create channel: Invalid response");
             }
@@ -572,7 +577,7 @@ class ClearNetService {
             const stateHash = await this.getStateHash(state);
 
             // Choose which wallet client to use for signing
-            const signingClient = this.client.config.stateWalletClient || this.client.config.walletClient;
+            const signingClient = this.config.stateWalletClient || this.config.walletClient;
             const signature = await signingClient.signMessage({
                 message: { raw: stateHash },
             });
@@ -586,115 +591,6 @@ class ClearNetService {
         } catch (error) {
             console.error("Failed to sign state:", error);
             return null;
-        }
-    }
-
-    async leaveGame() {
-        if (!this.client || !this.isConnected || !this.activeChannel) {
-            console.error("ClearNet client not initialized or no active channel");
-            return false;
-        }
-
-        try {
-            // In the new design, the client doesn't directly close game sessions
-            // Only the server can close an app session since it has 100% of the weight
-
-            // This method would typically just notify the game server that the player
-            // is leaving the game, and the server would handle the rest
-
-            // For documentation purposes, a leave game message might look like:
-            const leaveGameMessage = {
-                type: "leaveGame",
-                channelId: this.activeChannel.channelId,
-                playerAddress: this.currentAddress,
-                timestamp: Date.now(),
-            };
-
-            // In a real implementation, this would be sent to the game server's WebSocket
-
-            console.log("Player leaving game:", leaveGameMessage);
-
-            // Clear our local channel reference
-            this.activeChannel = null;
-
-            // Clear storage
-            try {
-                localStorage.removeItem("nitro_channel_id");
-                localStorage.removeItem("nitro_channel_state");
-            } catch (error) {
-                console.error("Failed to clear storage:", error);
-            }
-
-            return true;
-        } catch (error) {
-            console.error("Failed to leave game:", error);
-            return false;
-        }
-    }
-
-    // This function would be used if the player wants to withdraw funds from a channel
-    async closeChannel() {
-        if (!this.client || !this.isConnected) {
-            console.error("ClearNet client not initialized");
-            return false;
-        }
-
-        try {
-            // If we have an active channel, try to close it
-            if (this.activeChannel) {
-                // Call the Nitrolite SDK to close the channel
-                await this.client.closeChannel({
-                    channelId: this.activeChannel.channelId,
-                });
-
-                // Clear local storage
-                try {
-                    localStorage.removeItem("nitro_channel_id");
-                    localStorage.removeItem("nitro_channel_state");
-                } catch (error) {
-                    console.error("Failed to clear storage:", error);
-                }
-
-                this.activeChannel = null;
-            }
-
-            return true;
-        } catch (error) {
-            console.error("Failed to close channel:", error);
-            return false;
-        }
-    }
-
-    async withdrawFunds(amount: bigint) {
-        if (!this.client || !this.isConnected) {
-            console.error("ClearNet client not initialized");
-            return false;
-        }
-
-        try {
-            // Ensure amount is valid
-            if (amount <= 0n) {
-                throw new Error("Withdrawal amount must be greater than zero");
-            }
-
-            // Check available balance first
-            const accountInfo = await this.client.getAccountInfo();
-            if (!accountInfo || accountInfo.available < amount) {
-                throw new Error("Insufficient balance for withdrawal");
-            }
-
-            // Proceed with withdrawal
-            const withdrawalTx = await this.client.withdrawal(amount);
-
-            // Log transaction details for easier tracking
-            console.log(`Withdrawal transaction initiated: ${withdrawalTx.hash || "(no hash)"}`);
-            console.log(`Withdrawn amount: ${amount.toString()}`);
-            console.log(`Account: ${this.currentAddress}`);
-
-            return true;
-        } catch (error) {
-            console.error("Failed to withdraw funds:", error);
-            return false;
         }
     }
 
@@ -838,7 +734,7 @@ class ClearNetService {
     }
 
     // Helper method to hash a state with the Nitrolite protocol standard
-    async getStateHash(state: any): Promise<string> {
+    async getStateHash(state: any): Promise<Hex> {
         if (!this.client) {
             throw new Error("ClearNet client not initialized");
         }
@@ -863,11 +759,11 @@ class ClearNetService {
             const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 
             // Add the 0x prefix for Ethereum compatibility
-            return "0x" + hashHex;
+            return "0x" + hashHex as Hex;
         } catch (error) {
             console.error("Failed to hash state:", error);
             // Return a mock hash if there's an error
-            return "0x" + Array(64).fill("0").join("");
+            return "0x" + Array(64).fill("0").join("") as Hex;
         }
     }
 

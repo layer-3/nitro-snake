@@ -1,7 +1,7 @@
 import { ContractAddresses } from "@erc7824/nitrolite";
 import { Hex } from "viem";
 
-export const BROKER_WS_URL = process.env.BROKER_WS_URL || "wss://ethtaipei-production.up.railway.app/ws";
+export const BROKER_WS_URL = process.env.BROKER_WS_URL || "wss://clearnode-multichain-production.up.railway.app/ws";
 // A proper random key for testing - DO NOT USE THIS IN PRODUCTION
 export const SERVER_PRIVATE_KEY = (process.env.SERVER_PRIVATE_KEY || "0xfb7b8df29a2d02c4d9e01075740c0653ba29f712b14d771f322c82fec90925d8") as Hex;
 export const WALLET_PRIVATE_KEY = (process.env.WALLET_PRIVATE_KEY || "0x44225977210c2bfd75285a9933c567fbe42498531c2218df48603cc150eed494") as Hex;
