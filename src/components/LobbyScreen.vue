@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineEmits, defineProps, ref, onUnmounted, watch } from 'vue';
+import { defineEmits, defineProps, ref, watch } from 'vue';
 import WalletConnect from './WalletConnect.vue';
 import ChannelSetup from './ChannelSetup.vue';
 import gameService from '../services/GameService';

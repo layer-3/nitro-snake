@@ -22,6 +22,8 @@
     "ws": "^8.16.0"
   },
   "devDependencies": {
+    "@types/body-parser": "^1.19.5",
+    "@types/express": "^5.0.2",
     "@types/node": "^18.19.15",
     "@types/ws": "^8.5.10",
     "@vitejs/plugin-vue": "^5.2.3",

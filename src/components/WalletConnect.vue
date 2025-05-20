@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { ethers } from "ethers";
-import { createAuthRequestMessage, createAuthVerifyMessage, type NitroliteClientConfig } from "@erc7824/nitrolite";
+import { type NitroliteClientConfig } from "@erc7824/nitrolite";
 import { generateKeyPair } from "../crypto";
 import { createPublicClient, createWalletClient, custom, Hex, http } from "viem";
 import clearNetService from "../services/ClearNetService";
-import { CONTRACT_ADDRESSES, BROKER_WS_URL } from "../config";
+import { CONTRACT_ADDRESSES } from "../config";
 import { polygon } from "viem/chains";
 import { createEthersSigner } from "../crypto";
 

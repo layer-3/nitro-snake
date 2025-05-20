@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
-import clearNetService from '../services/ClearNetService';
 import gameService from '../services/GameService';
 
 const props = defineProps<{

@@ -8,13 +8,9 @@ import {
     MessageSigner,
     NitroliteClient,
     NitroliteClientConfig,
-    createAppSessionMessage,
-    Intent,
     AppDefinition,
     NitroliteRPC,
-    getRequestId,
     createGetLedgerBalancesMessage,
-    createCloseAppSessionMessage,
 } from "@erc7824/nitrolite";
 import { BROKER_WS_URL, CONTRACT_ADDRESSES, POLYGON_RPC_URL, WALLET_PRIVATE_KEY } from "../config";
 import { setBrokerWebSocket, getBrokerWebSocket, addPendingRequest, getPendingRequest, clearPendingRequest } from "./stateService";
@@ -23,7 +19,6 @@ import { polygon } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 import util from 'util';
-import { createApp } from "vue";
 util.inspect.defaultOptions.depth = null;
 
 const DEFAULT_PROTOCOL = "app_aura_nitrolite_v0";
@@ -483,7 +478,6 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
     // Create request data
     const request = {
         req: [requestId, method, params, timestamp],
-        sig: [""], // signature will be populated by sendToBroker function
         int: initialIntent,
     };
 
@@ -521,7 +515,6 @@ export async function closeAppSession(appId: Hex, allocations: number[] = [0, 0,
 
         const request = {
             req: [requestId, method, params, timestamp],
-            sig: [""],
         };
 
         console.log("[closeAppSession] Verifying app session exists:", appId);
@@ -544,7 +537,6 @@ export async function closeAppSession(appId: Hex, allocations: number[] = [0, 0,
     // Create request data
     const request = {
         req: [requestId, method, params, timestamp],
-        sig: [""], // signature will be populated by sendToBroker function
         int: allocations,
     };
 
@@ -692,7 +684,6 @@ export async function getChannelInfo(channelId: string): Promise<any> {
         // Create request data - we'll let sendToBroker sign it
         const request = {
             req: [requestId, method, reqParams, timestamp],
-            sig: [""], // Will be signed by sendToBroker
         };
 
         const result = await sendToBroker(request);

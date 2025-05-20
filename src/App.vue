@@ -9,8 +9,6 @@ const nickname = ref('');
 const roomId = ref('');
 const currentScreen = ref('lobby'); // 'lobby' or 'game'
 const errorMessage = ref('');
-const channelData = ref(null);
-const gameSessionId = ref('');
 
 // Create a new game room
 const createRoom = async () => {

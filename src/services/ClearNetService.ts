@@ -4,8 +4,6 @@ import {
     createAuthVerifyMessage,
     createGetLedgerBalancesMessage,
     type NitroliteClientConfig,
-    type RequestData,
-    type ResponsePayload,
 } from "@erc7824/nitrolite";
 import { BROKER_WS_URL } from "../config";
 import { createEthersSigner, generateKeyPair } from "../crypto";
@@ -32,8 +30,6 @@ class ClearNetService {
             timeout: NodeJS.Timeout;
         }
     >();
-    // Keep track of pending signature requests to prevent duplicate prompts
-    private pendingSignatures = new Map<string, Promise<string>>();
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 5;
     private reconnectDelay = 1000;
