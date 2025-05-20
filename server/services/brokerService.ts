@@ -478,7 +478,10 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
     }]
     const timestamp = Math.floor(Date.now() / 1000);
 
-    const request = await createAppSessionMessage(signer.sign, params, requestId, timestamp);
+    // Create the request with properly formatted parameters
+    const request: { req: [number, string, CreateAppSessionRequest[], number] } = {
+        req: [requestId, "create_app_session", params, timestamp],
+    };
 
     console.log("[createAppSession] Sending request:", request);
     const result = await sendToBroker(request);
@@ -507,7 +510,11 @@ export async function closeAppSession(appId: Hex, participantA: Hex, participant
 
     // Verify the app session exists before trying to close it
     try {
-        const request = await createGetAppDefinitionMessage(signer.sign, appId);
+        const requestId = Date.now();
+        const timestamp = Math.floor(Date.now() / 1000);
+        const request: { req: [number, string, { app_session_id: string }[], number] } = {
+            req: [requestId, "get_app_definition", [{ app_session_id: appId }], timestamp]
+        };
         console.log("[closeAppSession] Verifying app session exists:", appId);
         await sendToBroker(request);
         console.log("[closeAppSession] App session exists, proceeding with close");
@@ -528,7 +535,10 @@ export async function closeAppSession(appId: Hex, participantA: Hex, participant
     }];
     const timestamp = Math.floor(Date.now() / 1000);
 
-    const request = await createCloseAppSessionMessage(signer.sign, params, requestId, timestamp);
+    // Create the request with properly formatted parameters
+    const request: { req: [number, string, CloseAppSessionRequest[], number] } = {
+        req: [requestId, "close_app_session", params, timestamp]
+    };
 
     console.log("[closeAppSession] Sending close request:", request);
     await sendToBroker(request);
