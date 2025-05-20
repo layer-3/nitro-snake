@@ -23,6 +23,7 @@ import { polygon } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 import util from 'util';
+import { createApp } from "vue";
 util.inspect.defaultOptions.depth = null;
 
 const DEFAULT_PROTOCOL = "app_aura_nitrolite_v0";
@@ -106,6 +107,7 @@ async function getChannels(): Promise<void> {
 export function connectToBroker(): void {
     const brokerWs = getBrokerWebSocket();
     if (brokerWs && (brokerWs.readyState === WebSocket.OPEN || brokerWs.readyState === WebSocket.CONNECTING)) {
+        console.log("WebSocket already connected or connecting. State:", brokerWs.readyState);
         return;
     }
 
@@ -129,20 +131,32 @@ export function connectToBroker(): void {
     ws.on("message", (data) => {
         try {
             const message = JSON.parse(data.toString());
+            console.log("Received message from broker:", {
+                method: message.res?.[1],
+                requestId: message.res?.[0],
+                isAuthenticated
+            });
             handleBrokerMessage(message);
         } catch (error) {
             console.error("Error parsing message from broker:", error);
         }
     });
 
-    ws.on("close", () => {
-        console.log("Disconnected from Nitrolite broker, will reconnect in 5 seconds");
+    ws.on("close", (code, reason) => {
+        console.log("Disconnected from Nitrolite broker:", {
+            code,
+            reason: reason.toString(),
+            isAuthenticated
+        });
         isAuthenticated = false;
         setTimeout(connectToBroker, 5000);
     });
 
     ws.on("error", (error) => {
-        console.error("Error in broker WebSocket connection:", error);
+        console.error("Error in broker WebSocket connection:", {
+            error: error.message,
+            isAuthenticated
+        });
     });
 }
 
@@ -341,6 +355,7 @@ export async function sendToBroker(request: any): Promise<any> {
             console.log("Not authenticated with broker, authenticating first...");
             await authenticateWithBroker();
         } catch (error) {
+            console.error("Authentication failed:", error);
             throw new Error(`Authentication failed: ${error.message}`);
         }
     }
@@ -348,9 +363,17 @@ export async function sendToBroker(request: any): Promise<any> {
     return new Promise((resolve, reject) => {
         const brokerWs = getBrokerWebSocket();
         if (!brokerWs || brokerWs.readyState !== WebSocket.OPEN) {
+            console.error("WebSocket not connected or not open. State:", brokerWs?.readyState);
             reject(new Error("Not connected to broker"));
             return;
         }
+
+        console.log("Sending request to broker:", {
+            method: request.req?.[1],
+            requestId: request.req?.[0],
+            isAuthenticated,
+            wsState: brokerWs.readyState
+        });
 
         // Prepare the request using a Promise chain
         const prepareRequest = async (): Promise<{ req: any; requestId: string | number }> => {
@@ -391,6 +414,12 @@ export async function sendToBroker(request: any): Promise<any> {
                 const requestIdStr = requestId.toString();
 
                 const timeout = setTimeout(() => {
+                    console.error("Request timed out:", {
+                        requestId: requestIdStr,
+                        method: req.req[1],
+                        isAuthenticated,
+                        wsState: brokerWs.readyState
+                    });
                     clearPendingRequest(requestIdStr);
                     reject(new Error("Request timeout"));
                 }, 10000); // 10 second timeout
@@ -399,6 +428,7 @@ export async function sendToBroker(request: any): Promise<any> {
                 brokerWs.send(JSON.stringify(req));
             })
             .catch((error) => {
+                console.error("Failed to prepare request:", error);
                 reject(new Error(`Failed to prepare request: ${error.message}`));
             });
     });
@@ -438,18 +468,25 @@ export async function createAppSession(participantA: Hex, participantB: Hex): Pr
         nonce: Date.now(),
     };
 
-    const signedMessage = await createAppSessionMessage(
-        signer.sign,
-        [{
-            definition: appDefinition,
-            token: CONTRACT_ADDRESSES.tokenAddress as Hex,
-            allocations: initialIntent,
-        }],
-        initialIntent
-    );
-    console.log("Signed message", signedMessage);
+    // Create the request in the format expected by the broker
+    const requestId = Date.now();
+    const method = "create_app_session";
+    const params = [{
+        definition: appDefinition,
+        token: CONTRACT_ADDRESSES.tokenAddress as Hex,
+        allocations: initialIntent,
+    }];
+    const timestamp = Math.floor(Date.now() / 1000);
 
-    const result = await sendToBroker(signedMessage);
+    // Create request data
+    const request = {
+        req: [requestId, method, params, timestamp],
+        sig: [""], // signature will be populated by sendToBroker function
+        int: initialIntent,
+    };
+
+    console.log("Sending create_app_session request:", request);
+    const result = await sendToBroker(request);
     const appId = result.app_id || (typeof result[0] === "object" ? result[0].app_id : null);
     console.log(`Created app session ${appId}`);
     return appId;
